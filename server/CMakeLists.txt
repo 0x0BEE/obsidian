@@ -3,6 +3,7 @@ add_executable(obsidian
         "src/log.c"
         "src/server.c"
         "src/memory/pool_allocator.c"
+        "src/memory/ring_buffer.c"
         "include/obsidian/log.h"
         "include/obsidian/server.h"
         "include/obsidian/memory.h")
@@ -13,6 +14,9 @@ set_target_properties(obsidian PROPERTIES
         C_STANDARD_REQUIRED ON
         # We make use of GNU compiler extensions
         C_EXTENSIONS ON)
+
+target_compile_definitions(obsidian
+        PRIVATE _GNU_SOURCE)
 
 target_include_directories(obsidian
         PRIVATE "include")
