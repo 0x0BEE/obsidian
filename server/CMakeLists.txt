@@ -10,3 +10,6 @@ set_target_properties(obsidian PROPERTIES
 
 target_include_directories(obsidian
         PRIVATE "include")
+
+target_link_libraries(obsidian
+        PRIVATE uring::uring)
