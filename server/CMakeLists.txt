@@ -1,6 +1,8 @@
 add_executable(obsidian
         "src/main.c"
+        "src/log.c"
         "src/memory/pool_allocator.c"
+        "include/obsidian/log.h"
         "include/obsidian/memory.h")
 
 set_target_properties(obsidian PROPERTIES
