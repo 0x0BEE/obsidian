@@ -59,9 +59,10 @@ typedef int8_t mc_bool;
  * Minecraft protocol packet IDs.
  */
 enum mc_proto_packet_type {
-    MC_PACKET_AUTHENTICATION = 0x01,
-    MC_PACKET_HANDSHAKE      = 0x02,
-    MC_PACKET_PLAYER_TRANSFORM      = 0x0D,
+    MC_PACKET_AUTHENTICATION   = 0x01,
+    MC_PACKET_HANDSHAKE        = 0x02,
+    MC_PACKET_PLAYER_GROUNDED  = 0x0A,
+    MC_PACKET_PLAYER_TRANSFORM = 0x0D,
 };
 
 
@@ -163,8 +164,26 @@ int mc_proto_encode_handshake_response(void* buffer, size_t buffer_size,
 
 
 /*!
+ * Message containing information about whether player is on the ground or falling.
+ * \note Sent by the client.
+ */
+struct mc_proto_player_grounded {
+    /// MC_FALSE if the player is falling, MC_TRUE if the player is on the ground.
+    mc_bool grounded;
+};
+
+
+/*!
+ * Decodes a transform packet.
+ * \see mc_proto_decode_client_packet()
+ */
+int mc_proto_decode_player_grounded(void const* buffer, size_t buffer_size,
+                                    struct mc_proto_player_grounded* grounded);
+
+
+/*!
  * Message containing a full update on the player's position.
- * \note Sent by both the server and client.
+ * \note Sent by the client.
  */
 struct mc_proto_player_transform {
     /// X coordinate of the player in world space.
@@ -210,6 +229,7 @@ struct mc_proto_client_packet {
     union {
         struct mc_proto_authentication_request authentication;
         struct mc_proto_handshake_request handshake;
+        struct mc_proto_player_grounded grounded;
         struct mc_proto_player_transform transform;
     };
 };

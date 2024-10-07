@@ -175,11 +175,25 @@ int mc_proto_encode_handshake_response(void* buffer, size_t const buffer_size,
     return cursor;
 }
 
+int mc_proto_decode_player_grounded(void const* buffer, size_t const buffer_size,
+                                    struct mc_proto_player_grounded* grounded) {
+    assert(buffer != NULL);
+    assert(grounded != NULL);
+    ASSERT_BUFFER_SIZE(buffer_size, sizeof(mc_byte) + sizeof(mc_bool));
+    size_t cursor = 0;
+    mc_byte const type = decode_byte(buffer, &cursor);
+    if (type != MC_PACKET_PLAYER_GROUNDED) {
+        return 0;
+    }
+    grounded->grounded = decode_byte(buffer, &cursor);
+    return cursor;
+}
+
 int mc_proto_decode_player_transform(void const* buffer, size_t buffer_size,
                                      struct mc_proto_player_transform* transform) {
     assert(buffer != NULL);
     assert(transform != NULL);
-    ASSERT_BUFFER_SIZE(buffer_size, sizeof(mc_byte) + sizeof(mc_double) * 4 + sizeof(mc_float) * 2 + sizeof(mc_byte));
+    ASSERT_BUFFER_SIZE(buffer_size, sizeof(mc_byte) + sizeof(mc_double) * 4 + sizeof(mc_float) * 2 + sizeof(mc_bool));
     size_t cursor = 0;
     mc_byte const type = decode_byte(buffer, &cursor);
     if (type != MC_PACKET_PLAYER_TRANSFORM) {
@@ -208,6 +222,9 @@ int mc_proto_decode_client_packet(void const* buffer, size_t const buffer_size, 
 
         case MC_PACKET_HANDSHAKE:
             return mc_proto_decode_handshake_request(buffer, buffer_size, &packet->handshake);
+
+        case MC_PACKET_PLAYER_GROUNDED:
+            return mc_proto_decode_player_grounded(buffer, buffer_size, &packet->grounded);
 
         case MC_PACKET_PLAYER_TRANSFORM:
             return mc_proto_decode_player_transform(buffer, buffer_size, &packet->transform);
