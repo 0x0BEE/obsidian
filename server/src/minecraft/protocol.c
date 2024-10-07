@@ -17,12 +17,11 @@
  */
 
 #include "obsidian/minecraft/protocol.h"
+#include "obsidian/log.h"
 
 #include <assert.h>
 #include <endian.h>
 #include <string.h>
-
-#include "obsidian/log.h"
 
 #define ASSERT_BUFFER_SIZE(have, want) \
     do { \
@@ -51,6 +50,18 @@ static inline mc_word decode_word(uint8_t const* buf, size_t* cursor) {
     return x;
 }
 
+static inline void encode_dword(uint8_t* buf, mc_dword x, size_t* cursor) {
+    x = htobe32(x);
+    memcpy(buf + *cursor, &x, sizeof(mc_dword));
+    *cursor += sizeof(mc_dword);
+}
+
+static inline mc_dword decode_dword(uint8_t const* buf, size_t* cursor) {
+    mc_dword const x = be32toh(*(const uint32_t*)(buf + *cursor));
+    *cursor += sizeof(mc_dword);
+    return x;
+}
+
 static inline void encode_utf8_string(uint8_t* dst, mc_utf8_char const* str, uint16_t const len, size_t* cursor) {
     encode_word(dst, len, cursor);
     memcpy(dst + *cursor, str, len);
@@ -64,10 +75,57 @@ decode_utf8_string(mc_utf8_char* dst, uint8_t const* buf, size_t const len, size
     return dst;
 }
 
-int mc_proto_decode_handshake_request(void const* buffer, size_t const buffer_size,
-                                      struct mc_proto_handshake_request* packet) {
+int mc_proto_decode_authentication_request(void const* buffer, size_t buffer_size,
+                                           struct mc_proto_authentication_request* request) {
     assert(buffer != NULL);
-    assert(packet != NULL);
+    assert(request != NULL);
+    ASSERT_BUFFER_SIZE(buffer_size, 7);
+    size_t cursor = 0;
+    mc_byte const type = decode_byte(buffer, &cursor);
+    if (type != MC_PACKET_AUTHENTICATION) {
+        return 0;
+    }
+    // Read and sanitize the username length.
+    request->protocol_version = decode_dword(buffer, &cursor);
+    request->username_length = decode_word(buffer, &cursor);
+    if (request->username_length > MINECRAFT_USERNAME_LENGTH) {
+        OBS_LOG_WARN("protocol", "Received username length > 16. This is invalid data!");
+        return 0;
+    }
+    ASSERT_BUFFER_SIZE(buffer_size, cursor + request->username_length + sizeof(mc_word));
+    decode_utf8_string(request->username, buffer, request->username_length, &cursor);
+    request->password_length = decode_word(buffer, &cursor);
+    if (request->password_length > 32) {
+        OBS_LOG_WARN("protocol", "Received password length > 32. This is invalid data!");
+        return 0;
+    }
+    decode_utf8_string(request->password, buffer, request->password_length, &cursor);
+    return cursor;
+}
+
+int mc_proto_encode_authentication_response(void* buffer, size_t buffer_size,
+                                            struct mc_proto_authentication_response const* response) {
+    assert(response != NULL);
+    size_t const needed = sizeof(mc_byte)
+                          + sizeof(mc_dword)
+                          + sizeof(mc_word) + sizeof(mc_utf8_char) * response->unknown0_length
+                          + sizeof(mc_word) + sizeof(mc_utf8_char) * response->unknown1_length;
+    ASSERT_BUFFER_SIZE(buffer_size, needed);
+    assert(buffer != NULL);
+    size_t cursor = 0;
+    encode_byte(buffer, MC_PACKET_AUTHENTICATION, &cursor);
+    encode_dword(buffer, response->entity_id, &cursor);
+    encode_word(buffer, response->unknown0_length, &cursor);
+    encode_utf8_string(buffer, response->unknown0, response->unknown0_length, &cursor);
+    encode_word(buffer, response->unknown1_length, &cursor);
+    encode_utf8_string(buffer, response->unknown1, response->unknown1_length, &cursor);
+    return cursor;
+}
+
+int mc_proto_decode_handshake_request(void const* buffer, size_t const buffer_size,
+                                      struct mc_proto_handshake_request* request) {
+    assert(buffer != NULL);
+    assert(request != NULL);
     ASSERT_BUFFER_SIZE(buffer_size, 3);
     size_t cursor = 0;
     mc_byte const type = decode_byte(buffer, &cursor);
@@ -75,10 +133,13 @@ int mc_proto_decode_handshake_request(void const* buffer, size_t const buffer_si
         return 0;
     }
     // Read the username length, but sanitize this value.
-    packet->name_length = decode_word(buffer, &cursor);
-    packet->name_length = packet->name_length > 16 ? 16 : packet->name_length;
-    ASSERT_BUFFER_SIZE(buffer_size, cursor + packet->name_length);
-    decode_utf8_string(packet->name, buffer, packet->name_length, &cursor);
+    request->name_length = decode_word(buffer, &cursor);
+    if (request->name_length > MINECRAFT_USERNAME_LENGTH) {
+        OBS_LOG_WARN("protocol", "Received name length > 16. This is invalid data!");
+        return 0;
+    }
+    ASSERT_BUFFER_SIZE(buffer_size, cursor + request->name_length);
+    decode_utf8_string(request->name, buffer, request->name_length, &cursor);
     return cursor;
 }
 
@@ -102,6 +163,9 @@ int mc_proto_decode_client_packet(void const* buffer, size_t const buffer_size, 
     packet->type = decode_byte(buffer, &cursor);
 
     switch (packet->type) {
+        case MC_PACKET_AUTHENTICATION:
+            return mc_proto_decode_authentication_request(buffer, buffer_size, &packet->authentication);
+
         case MC_PACKET_HANDSHAKE:
             return mc_proto_decode_handshake_request(buffer, buffer_size, &packet->handshake);
 
@@ -115,6 +179,9 @@ int mc_proto_encode_server_packet(void* buffer, size_t const buffer_size, struct
     assert(packet != NULL);
 
     switch (packet->type) {
+        case MC_PACKET_AUTHENTICATION:
+            return mc_proto_encode_authentication_response(buffer, buffer_size, &packet->authentication);
+
         case MC_PACKET_HANDSHAKE:
             return mc_proto_encode_handshake_response(buffer, buffer_size, &packet->handshake);
 

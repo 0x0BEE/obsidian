@@ -22,6 +22,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define MINECRAFT_USERNAME_LENGTH 16
+
 #define MC_TRUE 0x01
 #define MC_FALSE 0x00
 
@@ -63,6 +65,62 @@ enum mc_proto_packet_type {
 
 
 /*!
+ * Second packet sent by the client to finalize the handshaking process.
+ *
+ * \note Sent by the client only.
+ */
+struct mc_proto_authentication_request {
+    mc_dword protocol_version;
+    mc_word username_length;
+    mc_utf8_char username[MINECRAFT_USERNAME_LENGTH];
+    mc_word password_length;
+    mc_utf8_char password[32];
+};
+
+
+/*!
+ * Decodes a buffer into an authentication request packet.
+ * \param[in] buffer Buffer to read data from.
+ * \param[in] buffer_size Size of the buffer.
+ * \param[out] request Pointer to a packet structure to which the result is written.
+ * \return The function can return one of the following:
+ *         - <0 indicates the data is incomplete; the value represents how many more bytes are needed.
+ *         - =0 indicates there was an error decoding the data.
+ *         - >0 indicates the data was successfully read and decoded; the value represents the amount of bytes read.
+ * \note The buffer is assumed to be in network byte order.
+ */
+int mc_proto_decode_authentication_request(void const* buffer, size_t buffer_size,
+                                           struct mc_proto_authentication_request* request);
+
+
+/*!
+ * Sent by the server in response to an authentication request.
+ *
+ * \note Sent by the server only.
+ */
+struct mc_proto_authentication_response {
+    /// Looks to be some kind of ID, perhaps the entity assigned to the player?
+    mc_dword entity_id;
+
+    /// Length of unknown0.
+    mc_word unknown0_length;
+
+    /// Unknown. The official server sends an empty string.
+    mc_utf8_char* unknown0;
+
+    /// Length of unknown1.
+    mc_word unknown1_length;
+
+    /// Unknown. The official server sends an empty string.
+    mc_utf8_char* unknown1;
+};
+
+
+int mc_proto_encode_authentication_response(void* buffer, size_t buffer_size,
+                                            struct mc_proto_authentication_response const* response);
+
+
+/*!
  * First packet sent by the client to begin the handshaking process.
  *
  * \note Sent by the client only.
@@ -72,7 +130,7 @@ struct mc_proto_handshake_request {
     mc_word name_length;
 
     /// Username string.
-    mc_utf8_char name[16];
+    mc_utf8_char name[MINECRAFT_USERNAME_LENGTH];
 };
 
 
@@ -80,7 +138,7 @@ struct mc_proto_handshake_request {
  * Decodes a buffer into a handshake request packet.
  * \param[in] buffer Buffer to read data from.
  * \param[in] buffer_size Size of the buffer.
- * \param[out] packet Pointer to a packet structure to which the result is written.
+ * \param[out] request Pointer to a packet structure to which the result is written.
  * \return The function can return one of the following:
  *         - <0 indicates the data is incomplete; the value represents how many more bytes are needed.
  *         - =0 indicates there was an error decoding the data.
@@ -88,7 +146,7 @@ struct mc_proto_handshake_request {
  * \note The buffer is assumed to be in network byte order.
  */
 int mc_proto_decode_handshake_request(void const* buffer, size_t buffer_size,
-                                      struct mc_proto_handshake_request* packet);
+                                      struct mc_proto_handshake_request* request);
 
 
 /*!
@@ -131,6 +189,7 @@ struct mc_proto_client_packet {
 
     /// Anonymous union of packet data.
     union {
+        struct mc_proto_authentication_request authentication;
         struct mc_proto_handshake_request handshake;
     };
 };
@@ -157,6 +216,7 @@ struct mc_proto_server_packet {
 
     /// Anonymous union of packet data.
     union {
+        struct mc_proto_authentication_response authentication;
         struct mc_proto_handshake_response handshake;
     };
 };
