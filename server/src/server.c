@@ -24,10 +24,62 @@
 #include <netdb.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+
+
+/*!
+ * A simple wrapper around obs_ring_buffer that keeps track of a read and write cursor.
+ * \see obs_rw_buffer_size()
+ * \see obs_rw_buffer_capacity()
+ * \see obs_rw_buffer_read_ptr()
+ * \see obs_rw_buffer_write_ptr()
+ */
+struct obs_rw_buffer {
+    struct obs_ring_buffer* ring;
+    size_t read_cursor;
+    size_t write_cursor;
+};
+
+
+/*!
+ * Gets the size of readable data in the buffer.
+ * \param b Pointer to an obs_rw_buffer structure.
+ * \return Size in bytes of readable data in the buffer.
+ */
+size_t obs_rw_buffer_size(struct obs_rw_buffer const* b) {
+    return b->write_cursor - b->read_cursor;
+}
+
+/*!
+ * Gets the size of the writeable space in this buffer.
+ * \param b Pointer to an obs_rw_buffer structure.
+ * \return Size in bytes of write capacity in the buffer.
+ */
+size_t obs_rw_buffer_capacity(struct obs_rw_buffer const* b) {
+    return b->ring->size - obs_rw_buffer_size(b);
+}
+
+/*!
+ * Gets a pointer to readable portion of the buffer.
+ * \param b Pointer to an obs_rw_buffer structure.
+ * \return Pointer to the readable memory in the buffer.
+ * \note Call obs_rw_buffer_size() to find the length of the readable data.
+ */
+uint8_t* obs_rw_buffer_read_ptr(struct obs_rw_buffer const* b) {
+    return b->ring->data + b->read_cursor % b->ring->size;
+}
+
+/*!
+ * Gets a pointer to writeable portion of the buffer.
+ * \param b Pointer to an obs_rw_buffer structure.
+ * \return Pointer to the writeable memory in the buffer.
+ * \note Call obs_rw_buffer_capacity() to find the length of the writeable memory.
+ */
+uint8_t* obs_rw_buffer_write_ptr(struct obs_rw_buffer const* b) {
+    return obs_rw_buffer_read_ptr(b) + obs_rw_buffer_capacity(b);
+}
 
 
 /*!
@@ -66,6 +118,15 @@ struct obs_session {
 
     /// Port of the connecting client.
     uint16_t port;
+
+    /// Read ring buffer.
+    struct obs_rw_buffer in;
+
+    /// Total amount of bytes received from this client.
+    size_t total_in;
+
+    /// Total amount of bytes sent to this client.
+    size_t total_out;
 };
 
 
@@ -104,6 +165,16 @@ struct obs_session* obs_server_get_available_session(struct obs_server const* se
     }
     OBS_LOG_TRACE("server", "Could not find unused session! The server may be full.");
     return NULL;
+}
+
+/*!
+ * Releases and resets a session, making it available for a new session.
+ * \param session Pointer to a client session structure.
+ */
+void obs_session_release(struct obs_session* session) {
+    OBS_LOG_TRACE("server", "Releasing session %08X:%d", session->address, session->port);
+    obs_free_ring_buffer(session->in.ring);
+    *session = (struct obs_session){0};
 }
 
 
@@ -162,6 +233,21 @@ struct obs_accept_frame {
 
 
 /*!
+ * Packet frame associated with a RECEIVE request.
+ */
+struct obs_receive_frame {
+    /// Buffer that is being written to.
+    void* buffer;
+
+    /// Total size of the buffer in bytes.
+    size_t buffer_size;
+
+    /// Total bytes that have been received into the buffer so far.
+    size_t bytes_in;
+};
+
+
+/*!
  * Packet frame data.
  *
  * \note These objects have the lifetime of a single packet. They are automatically allocated upon sending/receiving
@@ -171,16 +257,22 @@ struct obs_frame {
     /// One of obs_frame_type.
     int type;
 
+    /// Trace ID
+    uint64_t trace;
+
     /// Pointer to the connection session.
     struct obs_session* session;
 
 
     /// Union of possible frame data types. See type for how to interpret this data.
     union {
+        struct obs_receive_frame receive;
         struct obs_accept_frame accept;
     };
 };
 
+
+static uint32_t trace_counter = 1;
 
 /*!
  * Allocates a new packet frame.
@@ -190,10 +282,28 @@ struct obs_frame {
  * \return Pointer to the allocated packet frame.
  */
 struct obs_frame* obs_frame_create(struct obs_server const* server, struct obs_session* session, int const type) {
-    OBS_LOG_TRACE("server", "Creating new %s packet frame", obs_frame_type_to_string(type));
     struct obs_frame* frame = obs_pool_allocator_alloc(server->frame_allocator);
     frame->type = type;
     frame->session = session;
+    frame->trace = trace_counter++;
+    OBS_LOG_TRACE("server", "Created new %s packet frame[%llu]", obs_frame_type_to_string(type), frame->trace);
+    return frame;
+}
+
+/*!
+ * Allocates a new RECEIVE frame.
+ * \param server Pointer to a server structure.
+ * \param session Pointer to a client session.
+ * \param buffer Pointer to the buffer associated with this receive.
+ * \param buffer_size Size of the buffer.
+ * \return Pointer to the allocated packet frame.
+ */
+struct obs_frame* obs_frame_create_receive(struct obs_server const* server, struct obs_session* session,
+                                           void* buffer, size_t const buffer_size) {
+    struct obs_frame* frame = obs_frame_create(server, session, OBS_FRAME_RECEIVE);
+    frame->receive.buffer = buffer;
+    frame->receive.buffer_size = buffer_size;
+    frame->receive.bytes_in = 0;
     return frame;
 }
 
@@ -227,12 +337,52 @@ struct obs_frame* obs_frame_create_close(struct obs_server const* server, struct
  * \see io_uring_submit()
  */
 int obs_server_submit_queue(struct obs_server* server) {
-    OBS_LOG_TRACE("server", "Submitting I/O queue");
+    OBS_LOG_TRACE("server", "Submitting I/O queue to kernel");
     return io_uring_submit(&server->ring);
 }
 
 /*!
- * Queues an accept operation to the I/O ring buffer.
+ * Queues a recv() operation to the I/O ring buffer.
+ * \param server Pointer to a server structure.
+ * \param session Pointer to a client session structure.
+ * \param socket Socket file descriptor.
+ * \param buffer Pointer to the buffer to receive into.
+ * \param buffer_size Size of the buffer.
+ * \param flags Flags to pass to recv().
+ * \note This is an asynchronous function, to start the queued operation call obs_server_submit_queue().
+ */
+void obs_server_queue_recv(struct obs_server* server, struct obs_session* session,
+                           int const socket, void* buffer, size_t const buffer_size, int const flags) {
+    OBS_LOG_TRACE("server", "Queueing 'recv' I/O operation");
+    struct io_uring_sqe* sqe = io_uring_get_sqe(&server->ring);
+    struct obs_frame* frame = obs_frame_create_receive(server, session, buffer, buffer_size);
+    io_uring_prep_recv(sqe, socket, buffer, buffer_size, flags);
+    io_uring_sqe_set_data(sqe, frame);
+}
+
+/*!
+ * Queues a recv() operation on the buffer to receive additional data into it.
+ * \param server Pointer to a server structure.
+ * \param session Pointer to a client session structure.
+ * \param frame Pointer to the packet frame.
+ * \param socket Socket file descriptor.
+ * \param buffer Pointer to the buffer to receive into.
+ * \param buffer_size Size of the buffer.
+ * \param flags Flags to pass to recv().
+ * \note This function does not allocate a new packet frame.
+ * \note Buffer must be the same buffer as the previous call to receive, but must point to the start of the next
+ *       data to read. The buffer size must represent the remaining available space.
+ */
+void obs_server_queue_recv_more(struct obs_server* server, struct obs_session* session, struct obs_frame* frame,
+                                int const socket, void* buffer, size_t const buffer_size, int const flags) {
+    OBS_LOG_TRACE("server", "Queueing 'recv' I/O operation for additional data on frame[%llu]", frame->trace);
+    struct io_uring_sqe* sqe = io_uring_get_sqe(&server->ring);
+    io_uring_prep_recv(sqe, socket, buffer, buffer_size, flags);
+    io_uring_sqe_set_data(sqe, frame);
+}
+
+/*!
+ * Queues an accept() operation to the I/O ring buffer.
  * \param server Pointer to a server structure.
  * \param flags Flags to pass to accept().
  * \note This is an asynchronous function, to start the queued operation call obs_server_submit_queue().
@@ -248,7 +398,7 @@ void obs_server_queue_accept(struct obs_server* server, int const flags) {
 }
 
 /*!
- * Queues a close operation to the I/O ring buffer.
+ * Queues a close() operation to the I/O ring buffer.
  * \param server Pointer to a server structure.
  * \param session Pointer to a client session structure.
  * \param fd File descriptor to close.
@@ -260,6 +410,45 @@ void obs_server_queue_close(struct obs_server* server, struct obs_session* sessi
     struct obs_frame* frame = obs_frame_create_close(server, session);
     io_uring_prep_close(sqe, fd);
     io_uring_sqe_set_data(sqe, frame);
+}
+
+/*!
+ * Completes a receive operation.
+ * \param server Pointer to a server structure.
+ * \param frame Pointer to the packet frame.
+ * \param cqe Pointer to the completion queue entry.
+ */
+void obs_server_handle_recv(struct obs_server* server, struct obs_frame* frame, struct io_uring_cqe const* cqe) {
+    struct obs_session* session = frame->session;
+    if (cqe->res < 0) {
+        OBS_LOG_URING_ERROR("server", "recv", cqe->res);
+        obs_server_queue_close(server, session, session->socket);
+        OBS_LOG_TRACE("server", "Destroying %s network frame[%llu]",
+                      obs_frame_type_to_string(frame->type),
+                      frame->trace);
+        obs_pool_allocator_free(server->frame_allocator, frame);
+    }
+    else if (cqe->res == 0) {
+        OBS_LOG_INFO("server", "%08X:%d has disconnected", session->address, session->port);
+        obs_server_queue_close(server, session, session->socket);
+        OBS_LOG_TRACE("server", "Destroying %s network frame[%llu]",
+                      obs_frame_type_to_string(frame->type),
+                      frame->trace);
+        obs_pool_allocator_free(server->frame_allocator, frame);
+    }
+    else {
+        size_t const bytes_received = cqe->res;
+        // Move the write cursor ahead.
+        session->in.write_cursor += bytes_received;
+        session->total_in += bytes_received;
+        OBS_LOG_TRACE("server", "Received %llu bytes (%llu bytes total) from %08X:%d",
+                      bytes_received, session->total_in, session->address, session->port);
+        // Queue up another receive.
+        obs_server_queue_recv_more(server, session, frame, session->socket,
+                                   obs_rw_buffer_write_ptr(&session->in),
+                                   obs_rw_buffer_capacity(&session->in), 0);
+    }
+    obs_server_submit_queue(server);
 }
 
 /*!
@@ -282,15 +471,20 @@ void obs_server_handle_accept(struct obs_server* server, struct obs_frame* frame
             obs_server_queue_close(server, NULL, cqe->res);
         }
         else {
+            OBS_LOG_TRACE("server", "Assigning session to connection %08X:%d", address, port);
             session->socket = cqe->res;
             session->address = address;
             session->port = port;
-            obs_server_queue_close(server, session, cqe->res);
+            session->in.ring = obs_alloc_ring_buffer(4096, 1);
+            obs_server_queue_recv(server, session, session->socket,
+                                  obs_rw_buffer_write_ptr(&session->in),
+                                  obs_rw_buffer_capacity(&session->in), 0);
         }
     }
     // Clean up the network frame.
     obs_server_queue_accept(server, 0);
     obs_server_submit_queue(server);
+    OBS_LOG_TRACE("server", "Destroying %s network frame[%llu]", obs_frame_type_to_string(frame->type), frame->trace);
     obs_pool_allocator_free(server->frame_allocator, frame);
 }
 
@@ -308,22 +502,30 @@ void obs_server_handle_close(struct obs_server const* server, struct obs_frame* 
         struct obs_session* session = frame->session;
         if (session != NULL) {
             OBS_LOG_INFO("server", "Server closed connection to %08X:%d", session->address, session->port);
-            OBS_LOG_TRACE("server", "Releasing session of %08X:%d", session->address, session->port);
-            *session = (struct obs_session){0};
+            obs_session_release(session);
         }
         else {
             OBS_LOG_INFO("server", "Server closed connection to client");
         }
     }
     // Clean up the network frame.
+    OBS_LOG_TRACE("server", "Destroying %s network frame[%llu]", obs_frame_type_to_string(frame->type), frame->trace);
     obs_pool_allocator_free(server->frame_allocator, frame);
 }
 
+/*!
+ * Handle a completion queue event.
+ * \param server Pointer to a server structure.
+ * \param cqe Pointer to a queue completion entry.
+ */
 void obs_server_handle_cqe(struct obs_server* server, struct io_uring_cqe const* cqe) {
     struct obs_frame* frame = (struct obs_frame*) cqe->user_data;
-    OBS_LOG_TRACE("server", "Got a CQE with result %d and frame type %s",
-                  cqe->res, obs_frame_type_to_string(frame->type));
+    OBS_LOG_TRACE("server", "Got a CQE with result %d and frame[%llu] type %s",
+                  cqe->res, frame->trace, obs_frame_type_to_string(frame->type));
     switch (frame->type) {
+        case OBS_FRAME_RECEIVE:
+            return obs_server_handle_recv(server, frame, cqe);
+
         case OBS_FRAME_ACCEPT:
             return obs_server_handle_accept(server, frame, cqe);
 
@@ -331,7 +533,7 @@ void obs_server_handle_cqe(struct obs_server* server, struct io_uring_cqe const*
             return obs_server_handle_close(server, frame, cqe);
 
         default:
-            OBS_LOG_FATAL("server", "Received unknown frame/CQE!");
+            OBS_LOG_FATAL("server", "Received unknown frame[%llu] type or invalid CQE!", frame->trace);
             exit(EXIT_FAILURE);
     }
 }
