@@ -61,6 +61,7 @@ typedef int8_t mc_bool;
 enum mc_proto_packet_type {
     MC_PACKET_AUTHENTICATION = 0x01,
     MC_PACKET_HANDSHAKE      = 0x02,
+    MC_PACKET_PLAYER_TRANSFORM      = 0x0D,
 };
 
 
@@ -80,14 +81,7 @@ struct mc_proto_authentication_request {
 
 /*!
  * Decodes a buffer into an authentication request packet.
- * \param[in] buffer Buffer to read data from.
- * \param[in] buffer_size Size of the buffer.
- * \param[out] request Pointer to a packet structure to which the result is written.
- * \return The function can return one of the following:
- *         - <0 indicates the data is incomplete; the value represents how many more bytes are needed.
- *         - =0 indicates there was an error decoding the data.
- *         - >0 indicates the data was successfully read and decoded; the value represents the amount of bytes read.
- * \note The buffer is assumed to be in network byte order.
+ * \see mc_proto_decode_client_packet()
  */
 int mc_proto_decode_authentication_request(void const* buffer, size_t buffer_size,
                                            struct mc_proto_authentication_request* request);
@@ -116,6 +110,10 @@ struct mc_proto_authentication_response {
 };
 
 
+/*!
+ * Encodes an authentication response into a buffer.
+ * \see mc_proto_encode_server_packet()
+ */
 int mc_proto_encode_authentication_response(void* buffer, size_t buffer_size,
                                             struct mc_proto_authentication_response const* response);
 
@@ -136,14 +134,7 @@ struct mc_proto_handshake_request {
 
 /*!
  * Decodes a buffer into a handshake request packet.
- * \param[in] buffer Buffer to read data from.
- * \param[in] buffer_size Size of the buffer.
- * \param[out] request Pointer to a packet structure to which the result is written.
- * \return The function can return one of the following:
- *         - <0 indicates the data is incomplete; the value represents how many more bytes are needed.
- *         - =0 indicates there was an error decoding the data.
- *         - >0 indicates the data was successfully read and decoded; the value represents the amount of bytes read.
- * \note The buffer is assumed to be in network byte order.
+ * \see mc_proto_decode_client_packet()
  */
 int mc_proto_decode_handshake_request(void const* buffer, size_t buffer_size,
                                       struct mc_proto_handshake_request* request);
@@ -165,18 +156,46 @@ struct mc_proto_handshake_response {
 
 /*!
  * Encodes a handshake response into a buffer.
- * \param[out] buffer Destination buffer to write the result to.
- * \param[in] buffer_size Size of the buffer in bytes.
- * \param[in] response Pointer to a handshake response packet to encode.
- * \return The function can return one of the following:
- *         - <0 means that the buffer was too small; the value will be the needed buffer size.
- *         - =0 indicates there was an error encoding the data.
- *         - >0 indicates the data was successfully encoded; the value represents the amount of bytes that were written
- *              to the buffer.
- * \note The resulting buffer will be encoded in network byte order.
+ * \see mc_proto_encode_server_packet()
  */
 int mc_proto_encode_handshake_response(void* buffer, size_t buffer_size,
                                        struct mc_proto_handshake_response const* response);
+
+
+/*!
+ * Message containing a full update on the player's position.
+ * \note Sent by both the server and client.
+ */
+struct mc_proto_player_transform {
+    /// X coordinate of the player in world space.
+    mc_double x;
+
+    /// Y coordinate of the player in world space.
+    mc_double y;
+
+    /// Y coordinate of the player's head in world space.
+    mc_double head_y;
+
+    /// Z coordinate of the player in world space.
+    mc_double z;
+
+    /// Rotation of the player's character.
+    mc_float yaw;
+
+    /// Angle of the player's head.
+    mc_float pitch;
+
+    /// Whether the character is on the ground or not.
+    mc_bool grounded;
+};
+
+
+/*!
+ * Decodes a transform packet.
+ * \see mc_proto_decode_client_packet()
+ */
+int mc_proto_decode_player_transform(void const* buffer, size_t buffer_size,
+                                     struct mc_proto_player_transform* transform);
 
 
 /*!
@@ -191,15 +210,16 @@ struct mc_proto_client_packet {
     union {
         struct mc_proto_authentication_request authentication;
         struct mc_proto_handshake_request handshake;
+        struct mc_proto_player_transform transform;
     };
 };
 
 
 /*!
  * Decodes a packet received from the Minecraft client.
- * @param[in] buffer The buffer containing data to be decoded.
- * @param[in] buffer_size Size of the buffer in bytes.
- * @param[out] packet Pointer to a client packet structure to which the result is written.
+ * \param[in] buffer The buffer containing data to be decoded.
+ * \param[in] buffer_size Size of the buffer in bytes.
+ * \param[out] packet Pointer to a client packet structure to which the result is written.
  * \return The function can return one of the following:
  *         - <0 indicates the data is incomplete; the value represents how many more bytes are needed.
  *         - =0 indicates there was an error decoding the data.

@@ -62,6 +62,26 @@ static inline mc_dword decode_dword(uint8_t const* buf, size_t* cursor) {
     return x;
 }
 
+static inline mc_qword decode_qword(uint8_t const* buf, size_t* cursor) {
+    mc_qword const x = be64toh(*(const uint64_t*)(buf + *cursor));
+    *cursor += sizeof(mc_qword);
+    return x;
+}
+
+static inline mc_float decode_float(uint8_t const* buf, size_t* cursor) {
+    mc_float x = 0.0f;
+    mc_dword const n = decode_dword(buf, cursor);
+    memcpy(&x, &n, sizeof(mc_float));
+    return x;
+}
+
+static inline mc_double decode_double(uint8_t const* buf, size_t* cursor) {
+    mc_double x = 0.0f;
+    mc_qword const n = decode_qword(buf, cursor);
+    memcpy(&x, &n, sizeof(mc_double));
+    return x;
+}
+
 static inline void encode_utf8_string(uint8_t* dst, mc_utf8_char const* str, uint16_t const len, size_t* cursor) {
     encode_word(dst, len, cursor);
     memcpy(dst + *cursor, str, len);
@@ -155,6 +175,26 @@ int mc_proto_encode_handshake_response(void* buffer, size_t const buffer_size,
     return cursor;
 }
 
+int mc_proto_decode_player_transform(void const* buffer, size_t buffer_size,
+                                     struct mc_proto_player_transform* transform) {
+    assert(buffer != NULL);
+    assert(transform != NULL);
+    ASSERT_BUFFER_SIZE(buffer_size, sizeof(mc_byte) + sizeof(mc_double) * 4 + sizeof(mc_float) * 2 + sizeof(mc_byte));
+    size_t cursor = 0;
+    mc_byte const type = decode_byte(buffer, &cursor);
+    if (type != MC_PACKET_PLAYER_TRANSFORM) {
+        return 0;
+    }
+    transform->x = decode_double(buffer, &cursor);
+    transform->y = decode_double(buffer, &cursor);
+    transform->head_y = decode_double(buffer, &cursor);
+    transform->z = decode_double(buffer, &cursor);
+    transform->yaw = decode_float(buffer, &cursor);
+    transform->pitch = decode_float(buffer, &cursor);
+    transform->grounded = decode_byte(buffer, &cursor);
+    return cursor;
+}
+
 int mc_proto_decode_client_packet(void const* buffer, size_t const buffer_size, struct mc_proto_client_packet* packet) {
     assert(buffer != NULL);
     assert(packet != NULL);
@@ -169,8 +209,11 @@ int mc_proto_decode_client_packet(void const* buffer, size_t const buffer_size, 
         case MC_PACKET_HANDSHAKE:
             return mc_proto_decode_handshake_request(buffer, buffer_size, &packet->handshake);
 
+        case MC_PACKET_PLAYER_TRANSFORM:
+            return mc_proto_decode_player_transform(buffer, buffer_size, &packet->transform);
+
         default:
-            OBS_LOG_WARN("protocol", "Cannot decode packet with unknown type %d", packet->type);
+            OBS_LOG_WARN("protocol", "Cannot decode packet with unknown type 0x%02X", packet->type);
             return 0;
     }
 }
@@ -186,7 +229,7 @@ int mc_proto_encode_server_packet(void* buffer, size_t const buffer_size, struct
             return mc_proto_encode_handshake_response(buffer, buffer_size, &packet->handshake);
 
         default:
-            OBS_LOG_WARN("protocol", "Cannot encode packet with unknown type %d", packet->type);
+            OBS_LOG_WARN("protocol", "Cannot encode packet with unknown type 0x%02X", packet->type);
             return 0;
     }
 }
