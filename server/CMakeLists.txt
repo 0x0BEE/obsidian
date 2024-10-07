@@ -4,9 +4,11 @@ add_executable(obsidian
         "src/server.c"
         "src/memory/pool_allocator.c"
         "src/memory/ring_buffer.c"
+        "src/minecraft/protocol.c"
         "include/obsidian/log.h"
         "include/obsidian/server.h"
-        "include/obsidian/memory.h")
+        "include/obsidian/memory.h"
+        "include/obsidian/minecraft/protocol.h")
 
 set_target_properties(obsidian PROPERTIES
         # This project is written in C17
