@@ -66,6 +66,7 @@ enum mc_proto_packet_type {
     MC_PACKET_PLAYER_POSITION  = 0x0B,
     MC_PACKET_PLAYER_TRANSFORM = 0x0D,
     MC_PACKET_CHUNK            = 0x32,
+    MC_PACKET_CHUNK_DATA       = 0x33,
 };
 
 
@@ -259,12 +260,38 @@ int mc_proto_decode_player_transform(void const* buffer, size_t buffer_size,
 struct mc_proto_chunk {
     mc_dword x;
     mc_dword z;
-    mc_bool unknown;
+    mc_bool initialize;
 };
 
 
 int mc_proto_encode_chunk(void* buffer, size_t buffer_size, struct mc_proto_chunk const* chunk);
 
+
+struct mc_proto_chunk_data {
+    /// X block coordinate from which to start the data.
+    mc_dword x;
+
+    /// Y block coordinate from which to start the data.
+    mc_word y;
+
+    /// Z block coordinate from which to start the data.
+    mc_dword z;
+
+    /// Width of the block data.
+    mc_byte x_size;
+
+    /// Height of the block data.
+    mc_byte y_size;
+
+    /// Depth of the block data.
+    mc_byte z_size;
+
+    /// Size of the compressed chunk data in bytes.
+    mc_dword compressed_size;
+};
+
+
+int mc_proto_encode_chunk_data(void* buffer, size_t buffer_size, struct mc_proto_chunk_data const* chunk_data);
 
 /*!
  * Struct containing all packets the client can send to the server.

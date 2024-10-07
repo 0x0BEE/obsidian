@@ -258,7 +258,25 @@ int mc_proto_encode_chunk(void* buffer, size_t buffer_size, struct mc_proto_chun
     encode_byte(buffer, MC_PACKET_CHUNK, &cursor);
     encode_dword(buffer, chunk->x, &cursor);
     encode_dword(buffer, chunk->z, &cursor);
-    encode_byte(buffer, chunk->unknown, &cursor);
+    encode_byte(buffer, chunk->initialize, &cursor);
+    return cursor;
+}
+
+int mc_proto_encode_chunk_data(void* buffer, size_t buffer_size, struct mc_proto_chunk_data const* chunk_data) {
+    assert(chunk_data != NULL);
+    size_t const needed = sizeof(mc_byte) * 4 + sizeof(mc_dword) * 3 + sizeof(mc_word) * 1
+                          + sizeof(mc_byte) * chunk_data->compressed_size;
+    ASSERT_BUFFER_SIZE(buffer_size, needed);
+    assert(buffer != NULL);
+    size_t cursor = 0;
+    encode_byte(buffer, MC_PACKET_CHUNK_DATA, &cursor);
+    encode_dword(buffer, chunk_data->x, &cursor);
+    encode_word(buffer, chunk_data->y, &cursor);
+    encode_dword(buffer, chunk_data->z, &cursor);
+    encode_byte(buffer, chunk_data->x_size, &cursor);
+    encode_byte(buffer, chunk_data->y_size, &cursor);
+    encode_byte(buffer, chunk_data->z_size, &cursor);
+    encode_dword(buffer, chunk_data->compressed_size, &cursor);
     return cursor;
 }
 
