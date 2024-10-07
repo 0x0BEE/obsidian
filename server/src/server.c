@@ -104,9 +104,6 @@ enum obs_session_status {
 };
 
 
-/*!
- * Client session data.
- */
 struct obs_session {
     /// File descriptor for the client connecting socket. If 0, the session is unused.
     int socket;
@@ -410,6 +407,15 @@ int obs_server_submit_queue(struct obs_server* server) {
     return io_uring_submit(&server->ring);
 }
 
+/*!
+ * Queues a send() operation to the I/O ring buffer.
+ * \param server Pointer to a server structure.
+ * \param session Pointer to a client session structure.
+ * \param socket Socket file descriptor.
+ * \param buffer Pointer to memory to send.
+ * \param buffer_size Size of the buffer.
+ * \param flags Flags to pass to send().
+ */
 void obs_server_queue_send(struct obs_server* server, struct obs_session* session,
                            int const socket, void* buffer, size_t const buffer_size, int const flags) {
     OBS_LOG_TRACE("server", "Queueing 'send' I/O operation");
@@ -490,6 +496,12 @@ void obs_server_queue_close(struct obs_server* server, struct obs_session* sessi
     io_uring_sqe_set_data(sqe, frame);
 }
 
+/*!
+ * Sends a heartbeat packet to the client in response to a heartbeat.
+ * \param server Pointer to a server structure.
+ * \param session Pointer to a client session structure.
+ * \param heartbeat Pointer to heartbeat packet structure.
+ */
 void obs_server_heartbeat(struct obs_server* server, struct obs_session* session,
                           struct mc_proto_heartbeat const* heartbeat) {
     OBS_LOG_TRACE("server", "Received heartbeat from %.*s (%08X:%d)",
@@ -503,6 +515,12 @@ void obs_server_heartbeat(struct obs_server* server, struct obs_session* session
     obs_server_submit_queue(server);
 }
 
+/*!
+ * Handles an authentication request.
+ * \param server Pointer to a server structure.
+ * \param session Pointer to a client session structure.
+ * \param authentication Pointer to an authenticate request packet structure.
+ */
 void obs_server_authenticate(struct obs_server* server, struct obs_session* session,
                              struct mc_proto_authentication_request const* authentication) {
     OBS_LOG_DEBUG("server", "Handling authentication request from %08X:%d", session->address, session->port);
@@ -542,6 +560,12 @@ void obs_server_authenticate(struct obs_server* server, struct obs_session* sess
                  session->username_length, session->username, session->address, session->port);
 }
 
+/*!
+ * Handles a handshake request.
+ * \param server Pointer to a server structure.
+ * \param session Pointer to a client session structure.
+ * \param request Pointer to a handshake request packet.
+ */
 void obs_server_handshake(struct obs_server* server, struct obs_session* session,
                           struct mc_proto_handshake_request const* request) {
     OBS_LOG_DEBUG("server", "Handling handshake request from %08X:%d", session->address, session->port);
@@ -572,6 +596,12 @@ void obs_server_handshake(struct obs_server* server, struct obs_session* session
                  session->username_length, session->username, session->address, session->port);
 }
 
+/*!
+ * Dispatches a packet based on its type.
+ * \param server Pointer to a server structure.
+ * \param session Pointer to a session structure.
+ * \param packet Pointer to a client packet structure.
+ */
 void obs_server_dispatch_packet(struct obs_server* server, struct obs_session* session,
                                 struct mc_proto_client_packet const* packet) {
     switch (packet->type) {
@@ -590,6 +620,12 @@ void obs_server_dispatch_packet(struct obs_server* server, struct obs_session* s
     }
 }
 
+/*!
+ * Processes received data from a client connection.
+ * \param server Pointer to a server structure.
+ * \param session Pointer to a client session structure.
+ * \param frame Pointer to a packet frame structure.
+ */
 void obs_server_process_data(struct obs_server* server, struct obs_session* session, struct obs_frame* frame) {
     // Read all packets in the buffer.
     for (size_t cursor = 0; cursor < frame->receive.bytes_in;) {
@@ -632,6 +668,12 @@ void obs_server_process_data(struct obs_server* server, struct obs_session* sess
                           obs_rw_buffer_capacity(&session->in), 0);
 }
 
+/*!
+ * Completes a send() operation.
+ * \param server Pointer to a server structure.
+ * \param frame Pointer to a packet frame structure.
+ * \param cqe Pointer to the completion queue entry.
+ */
 void obs_server_handle_send(struct obs_server* server, struct obs_frame* frame, struct io_uring_cqe const* cqe) {
     struct obs_session* session = frame->session;
     struct obs_send_frame* send_frame = &frame->send;

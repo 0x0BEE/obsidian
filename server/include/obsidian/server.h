@@ -38,12 +38,19 @@ struct obs_server_params {
 
 
 /*!
+ * Client session data.
+ */
+struct obs_session;
+
+
+/*!
  * \brief Asynchronous server that implements the Minecraft multiplayer protocol.
  *
  * obs_sever is an implementation of the Minecraft multiplayer protocol, internally it uses io_uring to asynchronously
  * process network calls. The server does not keep track of the world at all, but instead forwards processed packets.
  */
 struct obs_server;
+
 
 /*!
  * Creates a new server.
