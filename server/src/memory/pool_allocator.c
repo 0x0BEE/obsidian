@@ -50,7 +50,7 @@ struct obs_pool_allocator* obs_pool_allocator_create(size_t const element_size, 
     // The first allocation is at the start of the pool.
     allocator->next = (struct obs_pool_element*) &allocator->pool[0];
     struct obs_pool_element* prev = allocator->next;
-    for (size_t offset = 0; offset < element_count; offset += element_size) {
+    for (size_t offset = 0; offset < pool_size; offset += element_size) {
         struct obs_pool_element* element = (struct obs_pool_element*) (allocator->pool + offset);
         prev->next = element;
         prev = element;
