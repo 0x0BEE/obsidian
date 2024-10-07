@@ -19,6 +19,7 @@
 #include "obsidian/server.h"
 #include "obsidian/log.h"
 #include "obsidian/memory.h"
+#include "obsidian/minecraft/protocol.h"
 
 #include <liburing.h>
 #include <netdb.h>
@@ -112,6 +113,9 @@ struct obs_session {
 
     /// One of obs_session_status.
     int status;
+
+    size_t username_length;
+    char username[16];
 
     /// Remote address of the connecting client.
     uint32_t address;
@@ -486,6 +490,48 @@ void obs_server_queue_close(struct obs_server* server, struct obs_session* sessi
     io_uring_sqe_set_data(sqe, frame);
 }
 
+void obs_server_handshake(struct obs_server* server, struct obs_session* session,
+                          struct mc_proto_handshake_request const* request) {
+    OBS_LOG_DEBUG("server", "Handling handshake from %08X:%d", session->address, session->port);
+    if (session->status != SESSION_HANDSHAKING) {
+        OBS_LOG_WARN("server", "Received handshake from %08X:%d, but session status is not HANDSHAKING. Disconnecting!",
+                     session->address, session->port);
+        obs_server_queue_close(server, session, session->socket);
+        obs_server_submit_queue(server);
+        return;
+    }
+    // Copy over the username of the player.
+    session->username_length = request->name_length;
+    memcpy(session->username, request->name, request->name_length);
+    session->status = SESSION_AUTHENTICATING;
+    OBS_LOG_INFO("server", "Player %.*s (%08X:%d) is joining the game",
+                 session->username_length, session->username, session->address, session->port);
+    // Send back to the appropriate response to the client.
+    OBS_LOG_DEBUG("server", "Sending handshake response to %.*s (%08X:%d)",
+                  session->username_length, session->username, session->address, session->port);
+    struct mc_proto_handshake_response const response = {
+        .unknown_length = 1,
+        .unknown = "-",
+    };
+    size_t const length = -mc_proto_encode_handshake_response(NULL, 0, &response);
+    uint8_t* buffer = obs_server_get_buffer(server, length);
+    mc_proto_encode_handshake_response(buffer, length, &response);
+    obs_server_queue_send(server, session, session->socket, buffer, length, 0);
+    obs_server_submit_queue(server);
+}
+
+void obs_server_dispatch_packet(struct obs_server* server, struct obs_session* session,
+                                struct mc_proto_client_packet const* packet) {
+    switch (packet->type) {
+        case MC_PACKET_HANDSHAKE:
+            return obs_server_handshake(server, session, &packet->handshake);
+
+        default:
+            OBS_LOG_ERROR("server", "Received packet with ID %d, this packet is unhandled!", packet->type);
+            return;
+    }
+}
+
 void obs_server_handle_send(struct obs_server* server, struct obs_frame* frame, struct io_uring_cqe const* cqe) {
     struct obs_session* session = frame->session;
     struct obs_send_frame* send_frame = &frame->send;
@@ -544,11 +590,6 @@ void obs_server_handle_recv(struct obs_server* server, struct obs_frame* frame, 
         session->in.write_cursor += bytes_received;
         session->total_in += bytes_received;
         OBS_LOG_TRACE("server", "Received %llu bytes (%llu bytes total) from %08X:%d",
-                      bytes_received, session->total_in, session->address, session->port);
-        // Queue up another receive.
-        obs_server_queue_recv_more(server, session, frame, session->socket,
-                                   obs_rw_buffer_write_ptr(&session->in),
-                                   obs_rw_buffer_capacity(&session->in), 0);
                       bytes_received, frame->receive.bytes_in, session->address, session->port);
 
         // See if we can read this packet...
@@ -556,6 +597,7 @@ void obs_server_handle_recv(struct obs_server* server, struct obs_frame* frame, 
         int const result = mc_proto_decode_client_packet(frame->receive.buffer, frame->receive.bytes_in, &packet);
         if (result > 0) {
             OBS_LOG_TRACE("server", "Received full packet data!");
+            obs_server_dispatch_packet(server, session, &packet);
             // Now we queue up a new receive.
             // TODO: Handle the situation where there is more data in the buffer!
             obs_server_queue_recv(server, session, session->socket,
