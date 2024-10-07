@@ -439,23 +439,23 @@ void obs_server_queue_recv(struct obs_server* server, struct obs_session* sessio
 }
 
 /*!
- * Queues a recv() operation on the buffer to receive additional data into it.
+ * Queues a recv() operation on the buffer with an offset to write into.
  * \param server Pointer to a server structure.
  * \param session Pointer to a client session structure.
- * \param frame Pointer to the packet frame.
  * \param socket Socket file descriptor.
  * \param buffer Pointer to the buffer to receive into.
  * \param buffer_size Size of the buffer.
+ * \param offset Offset into the buffer to read at.
  * \param flags Flags to pass to recv().
  * \note This function does not allocate a new packet frame.
- * \note Buffer must be the same buffer as the previous call to receive, but must point to the start of the next
- *       data to read. The buffer size must represent the remaining available space.
  */
-void obs_server_queue_recv_more(struct obs_server* server, struct obs_session* session, struct obs_frame* frame,
-                                int const socket, void* buffer, size_t const buffer_size, int const flags) {
-    OBS_LOG_TRACE("server", "Queueing 'recv' I/O operation for additional data on frame[%llu]", frame->trace);
+void obs_server_queue_recv_offset(struct obs_server* server, struct obs_session* session, int const socket,
+                                  void* buffer, size_t const buffer_size, size_t offset, int const flags) {
+    OBS_LOG_TRACE("server", "Queueing 'recv' I/O operation for additional data");
     struct io_uring_sqe* sqe = io_uring_get_sqe(&server->ring);
-    io_uring_prep_recv(sqe, socket, buffer, buffer_size, flags);
+    struct obs_frame* frame = obs_frame_create_receive(server, session, buffer, buffer_size);
+    frame->receive.bytes_in = offset;
+    io_uring_prep_recv(sqe, socket, buffer + offset, buffer_size - offset, flags);
     io_uring_sqe_set_data(sqe, frame);
 }
 
@@ -492,7 +492,7 @@ void obs_server_queue_close(struct obs_server* server, struct obs_session* sessi
 
 void obs_server_authenticate(struct obs_server* server, struct obs_session* session,
                              struct mc_proto_authentication_request const* authentication) {
-    OBS_LOG_DEBUG("server", "Handling authentication from %08X:%d", session->address, session->port);
+    OBS_LOG_DEBUG("server", "Handling authentication request from %08X:%d", session->address, session->port);
     if (session->status != SESSION_AUTHENTICATING) {
         OBS_LOG_WARN(
             "server", "Received authentication from %08X:%d, but session status is not AUTHENTICATING. Disconnecting!",
@@ -512,7 +512,7 @@ void obs_server_authenticate(struct obs_server* server, struct obs_session* sess
     session->status = SESSION_CONNECTED;
     // Send the response packet.
     OBS_LOG_DEBUG("server", "Sending authentication response to %.*s (%08X:%d)",
-              session->username_length, session->username, session->address, session->port);
+                  session->username_length, session->username, session->address, session->port);
     struct mc_proto_authentication_response const response = {
         .entity_id = 0,
         .unknown0_length = 0,
@@ -531,7 +531,7 @@ void obs_server_authenticate(struct obs_server* server, struct obs_session* sess
 
 void obs_server_handshake(struct obs_server* server, struct obs_session* session,
                           struct mc_proto_handshake_request const* request) {
-    OBS_LOG_DEBUG("server", "Handling handshake from %08X:%d", session->address, session->port);
+    OBS_LOG_DEBUG("server", "Handling handshake request from %08X:%d", session->address, session->port);
     if (session->status != SESSION_HANDSHAKING) {
         OBS_LOG_WARN("server", "Received handshake from %08X:%d, but session status is not HANDSHAKING. Disconnecting!",
                      session->address, session->port);
@@ -569,9 +569,51 @@ void obs_server_dispatch_packet(struct obs_server* server, struct obs_session* s
             return obs_server_handshake(server, session, &packet->handshake);
 
         default:
-            OBS_LOG_ERROR("server", "Received packet with ID %d, this packet is unhandled!", packet->type);
+            OBS_LOG_ERROR("server", "Received packet with ID 0x%02X, this packet is unhandled!", packet->type);
             return;
     }
+}
+
+void obs_server_process_data(struct obs_server* server, struct obs_session* session, struct obs_frame* frame) {
+    // Read all packets in the buffer.
+    for (size_t cursor = 0; cursor < frame->receive.bytes_in;) {
+        OBS_LOG_TRACE("server", "Attempting to decode client packet");
+        struct mc_proto_client_packet packet;
+        int const result = mc_proto_decode_client_packet(frame->receive.buffer + cursor,
+                                                         frame->receive.bytes_in - cursor,
+                                                         &packet);
+        if (result > 0) {
+            OBS_LOG_TRACE("server", "Read %llu bytes from receive buffer on frame[%llu]", result, frame->trace);
+            OBS_LOG_TRACE("server", "Dispatching packet with type ID 0x%02X on frame[%llu]",
+                          packet.type, frame->trace);
+            cursor += result;
+            session->in.read_cursor += result;
+            obs_server_dispatch_packet(server, session, &packet);
+        }
+        else if (result < 0 && cursor < frame->receive.bytes_in) {
+            OBS_LOG_TRACE("server", "Data in receive buffer is incomplete by %llu bytes on frame[%llu]", -result,
+                          frame->trace);
+            // Queue up another receive, we need more data!
+            obs_server_queue_recv_offset(server, session, session->socket,
+                                         obs_rw_buffer_read_ptr(&session->in),
+                                         obs_rw_buffer_capacity(&session->in),
+                                         frame->receive.bytes_in - cursor,
+                                         0);
+
+            obs_server_release_frame(server, frame);
+            return;
+        }
+        else {
+            OBS_LOG_FATAL("server", "Received unparseable data from %08X:%d on frame[%llu], aborting!!",
+                          session->address, session->port, frame->trace);
+            exit(EXIT_FAILURE);
+        }
+    }
+    OBS_LOG_TRACE("server", "All data in receive buffer is processed, queueing new recv");
+    obs_server_release_frame(server, frame);
+    obs_server_queue_recv(server, session, session->socket,
+                          obs_rw_buffer_write_ptr(&session->in),
+                          obs_rw_buffer_capacity(&session->in), 0);
 }
 
 void obs_server_handle_send(struct obs_server* server, struct obs_frame* frame, struct io_uring_cqe const* cqe) {
@@ -634,31 +676,7 @@ void obs_server_handle_recv(struct obs_server* server, struct obs_frame* frame, 
         session->total_in += bytes_received;
         OBS_LOG_TRACE("server", "Received %llu bytes (%llu bytes total) from %08X:%d",
                       bytes_received, frame->receive.bytes_in, session->address, session->port);
-
-        // See if we can read this packet...
-        struct mc_proto_client_packet packet;
-        int const result = mc_proto_decode_client_packet(frame->receive.buffer, frame->receive.bytes_in, &packet);
-        if (result > 0) {
-            OBS_LOG_TRACE("server", "Received full packet data!");
-            obs_server_dispatch_packet(server, session, &packet);
-            // Now we queue up a new receive.
-            // TODO: Handle the situation where there is more data in the buffer!
-            obs_server_queue_recv(server, session, session->socket,
-                                  obs_rw_buffer_write_ptr(&session->in),
-                                  obs_rw_buffer_capacity(&session->in), 0);
-            obs_server_release_frame(server, frame);
-        }
-        else if (result < 0) {
-            // Queue up another receive, we need more data!
-            obs_server_queue_recv_more(server, session, frame, session->socket,
-                                       obs_rw_buffer_write_ptr(&session->in),
-                                       obs_rw_buffer_capacity(&session->in), 0);
-        }
-        else {
-            OBS_LOG_FATAL("server", "Received unparseable data from %08X:%d on frame[%llu], aborting!!",
-                          session->address, session->port, frame->trace);
-            exit(EXIT_FAILURE);
-        }
+        obs_server_process_data(server, session, frame);
     }
     obs_server_submit_queue(server);
 }
