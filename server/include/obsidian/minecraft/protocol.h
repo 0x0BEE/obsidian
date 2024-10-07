@@ -63,6 +63,7 @@ enum mc_proto_packet_type {
     MC_PACKET_AUTHENTICATION   = 0x01,
     MC_PACKET_HANDSHAKE        = 0x02,
     MC_PACKET_PLAYER_GROUNDED  = 0x0A,
+    MC_PACKET_PLAYER_POSITION  = 0x0B,
     MC_PACKET_PLAYER_TRANSFORM = 0x0D,
     MC_PACKET_CHUNK            = 0x32,
 };
@@ -197,6 +198,28 @@ int mc_proto_decode_player_grounded(void const* buffer, size_t buffer_size,
                                     struct mc_proto_player_grounded* grounded);
 
 
+struct mc_proto_player_position {
+    /// X coordinate of the player in world space.
+    mc_double x;
+
+    /// Y coordinate of the player in world space.
+    mc_double y;
+
+    /// Y coordinate of the player's head in world space.
+    mc_double head_y;
+
+    /// Z coordinate of the player in world space.
+    mc_double z;
+
+    /// MC_FALSE if the player is falling, MC_TRUE if the player is on the ground.
+    mc_bool grounded;
+};
+
+
+int mc_proto_decode_player_position(void const* buffer, size_t buffer_size,
+                                    struct mc_proto_player_position* position);
+
+
 /*!
  * Message containing a full update on the player's position.
  * \note Sent by the client.
@@ -220,7 +243,7 @@ struct mc_proto_player_transform {
     /// Angle of the player's head.
     mc_float pitch;
 
-    /// Whether the character is on the ground or not.
+    /// MC_FALSE if the player is falling, MC_TRUE if the player is on the ground.
     mc_bool grounded;
 };
 
@@ -257,6 +280,7 @@ struct mc_proto_client_packet {
         struct mc_proto_authentication_request authentication;
         struct mc_proto_handshake_request handshake;
         struct mc_proto_player_grounded grounded;
+        struct mc_proto_player_position position;
         struct mc_proto_player_transform transform;
     };
 };

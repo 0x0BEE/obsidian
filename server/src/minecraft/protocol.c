@@ -211,6 +211,24 @@ int mc_proto_decode_player_grounded(void const* buffer, size_t const buffer_size
     return cursor;
 }
 
+int mc_proto_decode_player_position(void const* buffer, size_t const buffer_size,
+                                    struct mc_proto_player_position* position) {
+    assert(buffer != NULL);
+    assert(position != NULL);
+    ASSERT_BUFFER_SIZE(buffer_size, sizeof(mc_byte) + sizeof(double) * 4 + sizeof(mc_bool));
+    size_t cursor = 0;
+    mc_byte const type = decode_byte(buffer, &cursor);
+    if (type != MC_PACKET_PLAYER_POSITION) {
+        return 0;
+    }
+    position->x = decode_double(buffer, &cursor);
+    position->y = decode_double(buffer, &cursor);
+    position->head_y = decode_double(buffer, &cursor);
+    position->z = decode_double(buffer, &cursor);
+    position->grounded = decode_byte(buffer, &cursor);
+    return cursor;
+}
+
 int mc_proto_decode_player_transform(void const* buffer, size_t buffer_size,
                                      struct mc_proto_player_transform* transform) {
     assert(buffer != NULL);
@@ -236,7 +254,7 @@ int mc_proto_encode_chunk(void* buffer, size_t buffer_size, struct mc_proto_chun
     size_t const needed = sizeof(mc_byte) + sizeof(mc_dword) * 2 + sizeof(mc_bool);
     ASSERT_BUFFER_SIZE(buffer_size, needed);
     assert(buffer != NULL);
-    size_t cursor =0;
+    size_t cursor = 0;
     encode_byte(buffer, MC_PACKET_CHUNK, &cursor);
     encode_dword(buffer, chunk->x, &cursor);
     encode_dword(buffer, chunk->z, &cursor);
@@ -263,6 +281,9 @@ int mc_proto_decode_client_packet(void const* buffer, size_t const buffer_size, 
 
         case MC_PACKET_PLAYER_GROUNDED:
             return mc_proto_decode_player_grounded(buffer, buffer_size, &packet->grounded);
+
+        case MC_PACKET_PLAYER_POSITION:
+            return mc_proto_decode_player_position(buffer, buffer_size, &packet->position);
 
         case MC_PACKET_PLAYER_TRANSFORM:
             return mc_proto_decode_player_transform(buffer, buffer_size, &packet->transform);
