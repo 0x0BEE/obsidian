@@ -95,6 +95,28 @@ decode_utf8_string(mc_utf8_char* dst, uint8_t const* buf, size_t const len, size
     return dst;
 }
 
+int mc_proto_encode_heartbeat(void* buffer, size_t buffer_size, struct mc_proto_heartbeat const* heartbeat) {
+    assert(heartbeat != NULL);
+    size_t const needed = sizeof(mc_byte);
+    ASSERT_BUFFER_SIZE(buffer_size, needed);
+    assert(buffer != NULL);
+    size_t cursor = 0;
+    encode_byte(buffer, MC_PACKET_HEARTBEAT, &cursor);
+    return cursor;
+}
+
+int mc_proto_decode_heartbeat(void const* buffer, size_t const buffer_size, struct mc_proto_heartbeat* heartbeat) {
+    assert(buffer != NULL);
+    assert(heartbeat != NULL);
+    ASSERT_BUFFER_SIZE(buffer_size, 1);
+    size_t cursor = 0;
+    mc_byte const type = decode_byte(buffer, &cursor);
+    if (type != MC_PACKET_HEARTBEAT) {
+        return 0;
+    }
+    return cursor;
+}
+
 int mc_proto_decode_authentication_request(void const* buffer, size_t buffer_size,
                                            struct mc_proto_authentication_request* request) {
     assert(buffer != NULL);
@@ -217,6 +239,9 @@ int mc_proto_decode_client_packet(void const* buffer, size_t const buffer_size, 
     packet->type = decode_byte(buffer, &cursor);
 
     switch (packet->type) {
+        case MC_PACKET_HEARTBEAT:
+            return mc_proto_decode_heartbeat(buffer, buffer_size, &packet->heartbeat);
+
         case MC_PACKET_AUTHENTICATION:
             return mc_proto_decode_authentication_request(buffer, buffer_size, &packet->authentication);
 

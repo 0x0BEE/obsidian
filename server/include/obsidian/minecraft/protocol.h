@@ -59,11 +59,26 @@ typedef int8_t mc_bool;
  * Minecraft protocol packet IDs.
  */
 enum mc_proto_packet_type {
+    MC_PACKET_HEARTBEAT        = 0x00,
     MC_PACKET_AUTHENTICATION   = 0x01,
     MC_PACKET_HANDSHAKE        = 0x02,
     MC_PACKET_PLAYER_GROUNDED  = 0x0A,
     MC_PACKET_PLAYER_TRANSFORM = 0x0D,
 };
+
+
+/*!
+ * Heartbeat package sent by the client to keep the connection alive. The server must respond to this packet with a
+ * heartbeat of their own.
+ *
+ * \note Sent by both the client and the server.
+ */
+struct mc_proto_heartbeat {};
+
+
+int mc_proto_encode_heartbeat(void* buffer, size_t buffer_size, struct mc_proto_heartbeat const* heartbeat);
+
+int mc_proto_decode_heartbeat(void const* buffer, size_t buffer_size, struct mc_proto_heartbeat* heartbeat);
 
 
 /*!
@@ -227,6 +242,7 @@ struct mc_proto_client_packet {
 
     /// Anonymous union of packet data.
     union {
+        struct mc_proto_heartbeat heartbeat;
         struct mc_proto_authentication_request authentication;
         struct mc_proto_handshake_request handshake;
         struct mc_proto_player_grounded grounded;
