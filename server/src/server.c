@@ -79,7 +79,7 @@ uint8_t* obs_rw_buffer_read_ptr(struct obs_rw_buffer const* b) {
  * \note Call obs_rw_buffer_capacity() to find the length of the writeable memory.
  */
 uint8_t* obs_rw_buffer_write_ptr(struct obs_rw_buffer const* b) {
-    return obs_rw_buffer_read_ptr(b) + obs_rw_buffer_capacity(b);
+    return obs_rw_buffer_read_ptr(b) + obs_rw_buffer_size(b);
 }
 
 
@@ -490,6 +490,45 @@ void obs_server_queue_close(struct obs_server* server, struct obs_session* sessi
     io_uring_sqe_set_data(sqe, frame);
 }
 
+void obs_server_authenticate(struct obs_server* server, struct obs_session* session,
+                             struct mc_proto_authentication_request const* authentication) {
+    OBS_LOG_DEBUG("server", "Handling authentication from %08X:%d", session->address, session->port);
+    if (session->status != SESSION_AUTHENTICATING) {
+        OBS_LOG_WARN(
+            "server", "Received authentication from %08X:%d, but session status is not AUTHENTICATING. Disconnecting!",
+            session->address, session->port);
+        obs_server_queue_close(server, session, session->socket);
+        obs_server_submit_queue(server);
+        return;
+    }
+    if (authentication->protocol_version != 1) {
+        OBS_LOG_INFO("server", "Player %.*s (%08X:%d) is running incompatible protocol version %d. Disconnecting!",
+                     session->username_length, session->username, session->address, session->port,
+                     authentication->protocol_version);
+        obs_server_queue_close(server, session, session->socket);
+        obs_server_submit_queue(server);
+        return;
+    }
+    session->status = SESSION_CONNECTED;
+    // Send the response packet.
+    OBS_LOG_DEBUG("server", "Sending authentication response to %.*s (%08X:%d)",
+              session->username_length, session->username, session->address, session->port);
+    struct mc_proto_authentication_response const response = {
+        .entity_id = 0,
+        .unknown0_length = 0,
+        .unknown0 = "",
+        .unknown1_length = 0,
+        .unknown1 = "",
+    };
+    size_t const length = -mc_proto_encode_authentication_response(NULL, 0, &response);
+    uint8_t* buffer = obs_server_get_buffer(server, length);
+    mc_proto_encode_authentication_response(buffer, length, &response);
+    obs_server_queue_send(server, session, session->socket, buffer, length, 0);
+    obs_server_submit_queue(server);
+    OBS_LOG_INFO("server", "Player %.*s (%08X:%d) has joined the game",
+                 session->username_length, session->username, session->address, session->port);
+}
+
 void obs_server_handshake(struct obs_server* server, struct obs_session* session,
                           struct mc_proto_handshake_request const* request) {
     OBS_LOG_DEBUG("server", "Handling handshake from %08X:%d", session->address, session->port);
@@ -504,8 +543,6 @@ void obs_server_handshake(struct obs_server* server, struct obs_session* session
     session->username_length = request->name_length;
     memcpy(session->username, request->name, request->name_length);
     session->status = SESSION_AUTHENTICATING;
-    OBS_LOG_INFO("server", "Player %.*s (%08X:%d) is joining the game",
-                 session->username_length, session->username, session->address, session->port);
     // Send back to the appropriate response to the client.
     OBS_LOG_DEBUG("server", "Sending handshake response to %.*s (%08X:%d)",
                   session->username_length, session->username, session->address, session->port);
@@ -518,11 +555,16 @@ void obs_server_handshake(struct obs_server* server, struct obs_session* session
     mc_proto_encode_handshake_response(buffer, length, &response);
     obs_server_queue_send(server, session, session->socket, buffer, length, 0);
     obs_server_submit_queue(server);
+    OBS_LOG_INFO("server", "Player %.*s (%08X:%d) is joining the game",
+                 session->username_length, session->username, session->address, session->port);
 }
 
 void obs_server_dispatch_packet(struct obs_server* server, struct obs_session* session,
                                 struct mc_proto_client_packet const* packet) {
     switch (packet->type) {
+        case MC_PACKET_AUTHENTICATION:
+            return obs_server_authenticate(server, session, &packet->authentication);
+
         case MC_PACKET_HANDSHAKE:
             return obs_server_handshake(server, session, &packet->handshake);
 
@@ -536,8 +578,9 @@ void obs_server_handle_send(struct obs_server* server, struct obs_frame* frame, 
     struct obs_session* session = frame->session;
     struct obs_send_frame* send_frame = &frame->send;
     if (cqe->res < 0) {
-        OBS_LOG_URING_ERROR("server", "send", cqe->res);
-        if (cqe->res != -EBADFD) {
+        // If we get -EBADF, that just means the connection was closed. This is not an error!
+        if (cqe->res != -EBADF) {
+            OBS_LOG_URING_ERROR("server", "send", cqe->res);
             obs_server_queue_close(server, session, session->socket);
         }
         obs_server_release_frame(server, frame);
@@ -571,9 +614,9 @@ void obs_server_handle_send(struct obs_server* server, struct obs_frame* frame, 
 void obs_server_handle_recv(struct obs_server* server, struct obs_frame* frame, struct io_uring_cqe const* cqe) {
     struct obs_session* session = frame->session;
     if (cqe->res < 0) {
-        OBS_LOG_URING_ERROR("server", "recv", cqe->res);
-        // If this is NOT a bad file descriptor error, we should close the connection.
-        if (cqe->res != -EBADFD) {
+        // If we get -EBADF, this is not really an error. Anything else is an error!
+        if (cqe->res != -EBADF) {
+            OBS_LOG_URING_ERROR("server", "recv", cqe->res);
             obs_server_queue_close(server, session, session->socket);
         }
         obs_server_release_frame(server, frame);
