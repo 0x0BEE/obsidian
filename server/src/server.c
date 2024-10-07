@@ -490,6 +490,19 @@ void obs_server_queue_close(struct obs_server* server, struct obs_session* sessi
     io_uring_sqe_set_data(sqe, frame);
 }
 
+void obs_server_heartbeat(struct obs_server* server, struct obs_session* session,
+                          struct mc_proto_heartbeat const* heartbeat) {
+    OBS_LOG_TRACE("server", "Received heartbeat from %.*s (%08X:%d)",
+                  session->username_length, session->username, session->address, session->port);
+    // This is, presumably, the keepalive packet. For now, let's just reply with an identical message.
+    struct mc_proto_heartbeat const response = {};
+    size_t const length = -mc_proto_encode_heartbeat(NULL, 0, &response);
+    uint8_t* buffer = obs_server_get_buffer(server, length);
+    mc_proto_encode_heartbeat(buffer, length, &response);
+    obs_server_queue_send(server, session, session->socket, buffer, length, 0);
+    obs_server_submit_queue(server);
+}
+
 void obs_server_authenticate(struct obs_server* server, struct obs_session* session,
                              struct mc_proto_authentication_request const* authentication) {
     OBS_LOG_DEBUG("server", "Handling authentication request from %08X:%d", session->address, session->port);
@@ -562,6 +575,9 @@ void obs_server_handshake(struct obs_server* server, struct obs_session* session
 void obs_server_dispatch_packet(struct obs_server* server, struct obs_session* session,
                                 struct mc_proto_client_packet const* packet) {
     switch (packet->type) {
+        case MC_PACKET_HEARTBEAT:
+            return obs_server_heartbeat(server, session, &packet->heartbeat);
+
         case MC_PACKET_AUTHENTICATION:
             return obs_server_authenticate(server, session, &packet->authentication);
 
