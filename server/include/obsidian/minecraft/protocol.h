@@ -64,6 +64,7 @@ enum mc_proto_packet_type {
     MC_PACKET_HANDSHAKE        = 0x02,
     MC_PACKET_PLAYER_GROUNDED  = 0x0A,
     MC_PACKET_PLAYER_TRANSFORM = 0x0D,
+    MC_PACKET_CHUNK            = 0x32,
 };
 
 
@@ -232,6 +233,16 @@ int mc_proto_decode_player_transform(void const* buffer, size_t buffer_size,
                                      struct mc_proto_player_transform* transform);
 
 
+struct mc_proto_chunk {
+    mc_dword x;
+    mc_dword z;
+    mc_bool unknown;
+};
+
+
+int mc_proto_encode_chunk(void* buffer, size_t buffer_size, struct mc_proto_chunk const* chunk);
+
+
 /*!
  * Struct containing all packets the client can send to the server.
  */
@@ -272,8 +283,10 @@ struct mc_proto_server_packet {
 
     /// Anonymous union of packet data.
     union {
+        struct mc_proto_heartbeat heartbeat;
         struct mc_proto_authentication_response authentication;
         struct mc_proto_handshake_response handshake;
+        struct mc_proto_chunk chunk;
     };
 };
 

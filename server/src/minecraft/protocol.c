@@ -231,6 +231,19 @@ int mc_proto_decode_player_transform(void const* buffer, size_t buffer_size,
     return cursor;
 }
 
+int mc_proto_encode_chunk(void* buffer, size_t buffer_size, struct mc_proto_chunk const* chunk) {
+    assert(chunk != NULL);
+    size_t const needed = sizeof(mc_byte) + sizeof(mc_dword) * 2 + sizeof(mc_bool);
+    ASSERT_BUFFER_SIZE(buffer_size, needed);
+    assert(buffer != NULL);
+    size_t cursor =0;
+    encode_byte(buffer, MC_PACKET_CHUNK, &cursor);
+    encode_dword(buffer, chunk->x, &cursor);
+    encode_dword(buffer, chunk->z, &cursor);
+    encode_byte(buffer, chunk->unknown, &cursor);
+    return cursor;
+}
+
 int mc_proto_decode_client_packet(void const* buffer, size_t const buffer_size, struct mc_proto_client_packet* packet) {
     assert(buffer != NULL);
     assert(packet != NULL);
@@ -264,11 +277,17 @@ int mc_proto_encode_server_packet(void* buffer, size_t const buffer_size, struct
     assert(packet != NULL);
 
     switch (packet->type) {
+        case MC_PACKET_HEARTBEAT:
+            return mc_proto_encode_heartbeat(buffer, buffer_size, &packet->heartbeat);
+
         case MC_PACKET_AUTHENTICATION:
             return mc_proto_encode_authentication_response(buffer, buffer_size, &packet->authentication);
 
         case MC_PACKET_HANDSHAKE:
             return mc_proto_encode_handshake_response(buffer, buffer_size, &packet->handshake);
+
+        case MC_PACKET_CHUNK:
+            return mc_proto_encode_chunk(buffer, buffer_size, &packet->chunk);
 
         default:
             OBS_LOG_WARN("protocol", "Cannot encode packet with unknown type 0x%02X", packet->type);
