@@ -62,10 +62,22 @@ static inline mc_dword decode_dword(uint8_t const* buf, size_t* cursor) {
     return x;
 }
 
+static inline void encode_qword(uint8_t* buf, mc_qword x, size_t* cursor) {
+    x = htobe64(x);
+    memcpy(buf + *cursor, &x, sizeof(mc_qword));
+    *cursor += sizeof(mc_qword);
+}
+
 static inline mc_qword decode_qword(uint8_t const* buf, size_t* cursor) {
     mc_qword const x = be64toh(*(const uint64_t*)(buf + *cursor));
     *cursor += sizeof(mc_qword);
     return x;
+}
+
+static inline void encode_float(uint8_t* buf, mc_float const x, size_t* cursor) {
+    mc_dword n;
+    memcpy(&n, &x, sizeof(mc_float));
+    encode_dword(buf, n, cursor);
 }
 
 static inline mc_float decode_float(uint8_t const* buf, size_t* cursor) {
@@ -73,6 +85,12 @@ static inline mc_float decode_float(uint8_t const* buf, size_t* cursor) {
     mc_dword const n = decode_dword(buf, cursor);
     memcpy(&x, &n, sizeof(mc_float));
     return x;
+}
+
+static inline void encode_double(uint8_t* buf, mc_double const x, size_t* cursor) {
+    mc_qword n;
+    memcpy(&n, &x, sizeof(mc_double));
+    encode_qword(buf, n, cursor);
 }
 
 static inline mc_double decode_double(uint8_t const* buf, size_t* cursor) {
@@ -93,6 +111,11 @@ decode_utf8_string(mc_utf8_char* dst, uint8_t const* buf, size_t const len, size
     memcpy(dst, buf + *cursor, len);
     *cursor += len;
     return dst;
+}
+
+static inline void encode_byte_array(uint8_t* dst, mc_byte const* str, uint16_t const len, size_t* cursor) {
+    memcpy(dst + *cursor, str, len);
+    *cursor += len;
 }
 
 int mc_proto_encode_heartbeat(void* buffer, size_t buffer_size, struct mc_proto_heartbeat const* heartbeat) {
@@ -197,6 +220,17 @@ int mc_proto_encode_handshake_response(void* buffer, size_t const buffer_size,
     return cursor;
 }
 
+int mc_proto_encode_time(void* buffer, size_t buffer_size, struct mc_proto_time const* time) {
+    assert(time != NULL);
+    size_t const needed = sizeof(mc_byte) + sizeof(mc_qword);
+    ASSERT_BUFFER_SIZE(buffer_size, needed);
+    assert(buffer != NULL);
+    size_t cursor = 0;
+    encode_byte(buffer, MC_PACKET_TIME, &cursor);
+    encode_qword(buffer, time->time, &cursor);
+    return cursor;
+}
+
 int mc_proto_decode_player_grounded(void const* buffer, size_t const buffer_size,
                                     struct mc_proto_player_grounded* grounded) {
     assert(buffer != NULL);
@@ -215,7 +249,7 @@ int mc_proto_decode_player_position(void const* buffer, size_t const buffer_size
                                     struct mc_proto_player_position* position) {
     assert(buffer != NULL);
     assert(position != NULL);
-    ASSERT_BUFFER_SIZE(buffer_size, sizeof(mc_byte) + sizeof(double) * 4 + sizeof(mc_bool));
+    ASSERT_BUFFER_SIZE(buffer_size, sizeof(mc_byte) + sizeof(mc_double) * 4 + sizeof(mc_bool));
     size_t cursor = 0;
     mc_byte const type = decode_byte(buffer, &cursor);
     if (type != MC_PACKET_PLAYER_POSITION) {
@@ -226,6 +260,40 @@ int mc_proto_decode_player_position(void const* buffer, size_t const buffer_size
     position->head_y = decode_double(buffer, &cursor);
     position->z = decode_double(buffer, &cursor);
     position->grounded = decode_byte(buffer, &cursor);
+    return cursor;
+}
+
+int mc_proto_decode_player_rotation(void const* buffer, size_t const buffer_size,
+    struct mc_proto_player_rotation* rotation) {
+    assert(buffer != NULL);
+    assert(rotation != NULL);
+    ASSERT_BUFFER_SIZE(buffer_size, sizeof(mc_byte) + sizeof(mc_float) * 2 + sizeof(mc_bool));
+    size_t cursor = 0;
+    mc_byte const type = decode_byte(buffer, &cursor);
+    if (type != MC_PACKET_PLAYER_ROTATION) {
+        return 0;
+    }
+    rotation->yaw = decode_float(buffer, &cursor);
+    rotation->pitch = decode_float(buffer, &cursor);
+    rotation->grounded = decode_byte(buffer, &cursor);
+    return cursor;
+}
+
+int mc_proto_encode_player_transform(void* buffer, size_t const buffer_size, struct mc_proto_player_transform const* transform) {
+    assert(transform != NULL);
+    size_t const needed = sizeof(mc_byte) + sizeof(mc_double) * 4 + sizeof(mc_float) * 2 + sizeof(mc_bool);
+    ASSERT_BUFFER_SIZE(buffer_size, needed);
+    assert(buffer != NULL);
+    size_t cursor = 0;
+    encode_byte(buffer, MC_PACKET_PLAYER_TRANSFORM, &cursor);
+    encode_double(buffer, transform->x, &cursor);
+    // Order for y and head_y is inverted when sending to client.
+    encode_double(buffer, transform->head_y, &cursor);
+    encode_double(buffer, transform->y, &cursor);
+    encode_double(buffer, transform->z, &cursor);
+    encode_float(buffer, transform->yaw, &cursor);
+    encode_float(buffer, transform->pitch, &cursor);
+    encode_byte(buffer, transform->grounded, &cursor);
     return cursor;
 }
 
@@ -264,7 +332,7 @@ int mc_proto_encode_chunk(void* buffer, size_t buffer_size, struct mc_proto_chun
 
 int mc_proto_encode_chunk_data(void* buffer, size_t buffer_size, struct mc_proto_chunk_data const* chunk_data) {
     assert(chunk_data != NULL);
-    size_t const needed = sizeof(mc_byte) * 4 + sizeof(mc_dword) * 3 + sizeof(mc_word) * 1
+    size_t const needed = sizeof(mc_byte) * 4 + sizeof(mc_dword) * 3 + sizeof(mc_word)
                           + sizeof(mc_byte) * chunk_data->compressed_size;
     ASSERT_BUFFER_SIZE(buffer_size, needed);
     assert(buffer != NULL);
@@ -277,6 +345,7 @@ int mc_proto_encode_chunk_data(void* buffer, size_t buffer_size, struct mc_proto
     encode_byte(buffer, chunk_data->y_size, &cursor);
     encode_byte(buffer, chunk_data->z_size, &cursor);
     encode_dword(buffer, chunk_data->compressed_size, &cursor);
+    encode_byte_array(buffer, chunk_data->data, chunk_data->compressed_size, &cursor);
     return cursor;
 }
 
@@ -303,6 +372,9 @@ int mc_proto_decode_client_packet(void const* buffer, size_t const buffer_size, 
         case MC_PACKET_PLAYER_POSITION:
             return mc_proto_decode_player_position(buffer, buffer_size, &packet->position);
 
+        case MC_PACKET_PLAYER_ROTATION:
+            return mc_proto_decode_player_rotation(buffer, buffer_size, &packet->rotation);
+
         case MC_PACKET_PLAYER_TRANSFORM:
             return mc_proto_decode_player_transform(buffer, buffer_size, &packet->transform);
 
@@ -325,8 +397,17 @@ int mc_proto_encode_server_packet(void* buffer, size_t const buffer_size, struct
         case MC_PACKET_HANDSHAKE:
             return mc_proto_encode_handshake_response(buffer, buffer_size, &packet->handshake);
 
+        case MC_PACKET_TIME:
+            return mc_proto_encode_time(buffer, buffer_size, &packet->time);
+
+        case MC_PACKET_PLAYER_TRANSFORM:
+            return mc_proto_encode_player_transform(buffer, buffer_size, &packet->transform);
+
         case MC_PACKET_CHUNK:
             return mc_proto_encode_chunk(buffer, buffer_size, &packet->chunk);
+
+        case MC_PACKET_CHUNK_DATA:
+            return mc_proto_encode_chunk_data(buffer, buffer_size, &packet->chunk_data);
 
         default:
             OBS_LOG_WARN("protocol", "Cannot encode packet with unknown type 0x%02X", packet->type);

@@ -62,8 +62,10 @@ enum mc_proto_packet_type {
     MC_PACKET_HEARTBEAT        = 0x00,
     MC_PACKET_AUTHENTICATION   = 0x01,
     MC_PACKET_HANDSHAKE        = 0x02,
+    MC_PACKET_TIME             = 0x04,
     MC_PACKET_PLAYER_GROUNDED  = 0x0A,
     MC_PACKET_PLAYER_POSITION  = 0x0B,
+    MC_PACKET_PLAYER_ROTATION  = 0x0C,
     MC_PACKET_PLAYER_TRANSFORM = 0x0D,
     MC_PACKET_CHUNK            = 0x32,
     MC_PACKET_CHUNK_DATA       = 0x33,
@@ -182,6 +184,23 @@ int mc_proto_encode_handshake_response(void* buffer, size_t buffer_size,
 
 
 /*!
+ * Packet sent by the server roughly every second to keep clients informed of the world's time.
+ *
+ * \note Sent by the server only.
+ */
+struct mc_proto_time {
+    /// Time in ticks since world creation.
+    mc_qword time;
+};
+
+
+/*!
+ * Encodes a time packet into a buffer.
+ * \see mc_proto_encode_server_packet()
+ */
+int mc_proto_encode_time(void* buffer, size_t buffer_size, struct mc_proto_time const* time);
+
+/*!
  * Message containing information about whether player is on the ground or falling.
  * \note Sent by the client.
  */
@@ -219,6 +238,20 @@ struct mc_proto_player_position {
 
 int mc_proto_decode_player_position(void const* buffer, size_t buffer_size,
                                     struct mc_proto_player_position* position);
+
+struct mc_proto_player_rotation {
+    /// Rotation of the player's character.
+    mc_float yaw;
+
+    /// Angle of the player's head.
+    mc_float pitch;
+
+    /// MC_FALSE if the player is falling, MC_TRUE if the player is on the ground.
+    mc_bool grounded;
+};
+
+int mc_proto_decode_player_rotation(void const* buffer, size_t buffer_size,
+                                    struct mc_proto_player_rotation* rotation);
 
 
 /*!
@@ -288,6 +321,9 @@ struct mc_proto_chunk_data {
 
     /// Size of the compressed chunk data in bytes.
     mc_dword compressed_size;
+
+    /// Compressed chunk data.
+    mc_byte const* data;
 };
 
 
@@ -308,6 +344,7 @@ struct mc_proto_client_packet {
         struct mc_proto_handshake_request handshake;
         struct mc_proto_player_grounded grounded;
         struct mc_proto_player_position position;
+        struct mc_proto_player_rotation rotation;
         struct mc_proto_player_transform transform;
     };
 };
@@ -337,7 +374,10 @@ struct mc_proto_server_packet {
         struct mc_proto_heartbeat heartbeat;
         struct mc_proto_authentication_response authentication;
         struct mc_proto_handshake_response handshake;
+        struct mc_proto_time time;
+        struct mc_proto_player_transform transform;
         struct mc_proto_chunk chunk;
+        struct mc_proto_chunk_data chunk_data;
     };
 };
 
