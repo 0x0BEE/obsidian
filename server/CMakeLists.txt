@@ -1,12 +1,10 @@
 add_executable(obsidian
         "src/main.c"
         "src/log.c"
-        "src/server.c"
         "src/memory/pool_allocator.c"
         "src/memory/ring_buffer.c"
         "src/minecraft/protocol.c"
         "include/obsidian/log.h"
-        "include/obsidian/server.h"
         "include/obsidian/memory.h"
         "include/obsidian/minecraft/protocol.h")
 
