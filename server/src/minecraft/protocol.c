@@ -349,6 +349,33 @@ int mc_proto_encode_chunk_data(void* buffer, size_t buffer_size, struct mc_proto
     return cursor;
 }
 
+int mc_proto_encode_disconnect(void* buffer, size_t buffer_size, struct mc_proto_disconnect const* disconnect) {
+    assert(disconnect != NULL);
+    size_t const needed = sizeof(mc_byte) + sizeof(mc_word) + sizeof(mc_utf8_char) * disconnect->message_length;
+    ASSERT_BUFFER_SIZE(buffer_size, needed);
+    assert(buffer != NULL);
+    size_t cursor = 0;
+    encode_byte(buffer, MC_PACKET_DISCONNECT, &cursor);
+    encode_word(buffer, disconnect->message_length, &cursor);
+    encode_utf8_string(buffer, disconnect->message, disconnect->message_length, &cursor);
+    return cursor;
+}
+
+int mc_proto_decode_disconnect(void const* buffer, size_t buffer_size, struct mc_proto_disconnect* disconnect) {
+    assert(buffer != NULL);
+    assert(disconnect != NULL);
+    ASSERT_BUFFER_SIZE(buffer_size, 3);
+    size_t cursor = 0;
+    mc_byte const type = decode_byte(buffer, &cursor);
+    if (type != MC_PACKET_DISCONNECT) {
+        return 0;
+    }
+    disconnect->message_length = decode_word(buffer, &cursor);
+    ASSERT_BUFFER_SIZE(buffer_size, cursor + disconnect->message_length);
+    decode_utf8_string(disconnect->message, buffer, disconnect->message_length, &cursor);
+    return cursor;
+}
+
 int mc_proto_decode_client_packet(void const* buffer, size_t const buffer_size, struct mc_proto_client_packet* packet) {
     assert(buffer != NULL);
     assert(packet != NULL);
@@ -377,6 +404,9 @@ int mc_proto_decode_client_packet(void const* buffer, size_t const buffer_size, 
 
         case MC_PACKET_PLAYER_TRANSFORM:
             return mc_proto_decode_player_transform(buffer, buffer_size, &packet->transform);
+
+        case MC_PACKET_DISCONNECT:
+            return mc_proto_decode_disconnect(buffer, buffer_size, &packet->disconnect);
 
         default:
             OBS_LOG_WARN("protocol", "Cannot decode packet with unknown type 0x%02X", packet->type);
@@ -408,6 +438,9 @@ int mc_proto_encode_server_packet(void* buffer, size_t const buffer_size, struct
 
         case MC_PACKET_CHUNK_DATA:
             return mc_proto_encode_chunk_data(buffer, buffer_size, &packet->chunk_data);
+
+        case MC_PACKET_DISCONNECT:
+            return mc_proto_encode_disconnect(buffer, buffer_size, &packet->disconnect);
 
         default:
             OBS_LOG_WARN("protocol", "Cannot encode packet with unknown type 0x%02X", packet->type);
