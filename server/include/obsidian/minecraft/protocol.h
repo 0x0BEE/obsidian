@@ -69,6 +69,7 @@ enum mc_proto_packet_type {
     MC_PACKET_PLAYER_TRANSFORM = 0x0D,
     MC_PACKET_CHUNK            = 0x32,
     MC_PACKET_CHUNK_DATA       = 0x33,
+    MC_PACKET_DISCONNECT       = 0xFF,
 };
 
 
@@ -239,6 +240,7 @@ struct mc_proto_player_position {
 int mc_proto_decode_player_position(void const* buffer, size_t buffer_size,
                                     struct mc_proto_player_position* position);
 
+
 struct mc_proto_player_rotation {
     /// Rotation of the player's character.
     mc_float yaw;
@@ -249,6 +251,7 @@ struct mc_proto_player_rotation {
     /// MC_FALSE if the player is falling, MC_TRUE if the player is on the ground.
     mc_bool grounded;
 };
+
 
 int mc_proto_decode_player_rotation(void const* buffer, size_t buffer_size,
                                     struct mc_proto_player_rotation* rotation);
@@ -329,6 +332,18 @@ struct mc_proto_chunk_data {
 
 int mc_proto_encode_chunk_data(void* buffer, size_t buffer_size, struct mc_proto_chunk_data const* chunk_data);
 
+
+struct mc_proto_disconnect {
+    mc_word message_length;
+    mc_utf8_char* message;
+};
+
+
+int mc_proto_encode_disconnect(void* buffer, size_t buffer_size, struct mc_proto_disconnect const* disconnect);
+
+int mc_proto_decode_disconnect(void const* buffer, size_t buffer_size, struct mc_proto_disconnect* disconnect);
+
+
 /*!
  * Struct containing all packets the client can send to the server.
  */
@@ -346,6 +361,7 @@ struct mc_proto_client_packet {
         struct mc_proto_player_position position;
         struct mc_proto_player_rotation rotation;
         struct mc_proto_player_transform transform;
+        struct mc_proto_disconnect disconnect;
     };
 };
 
@@ -378,6 +394,7 @@ struct mc_proto_server_packet {
         struct mc_proto_player_transform transform;
         struct mc_proto_chunk chunk;
         struct mc_proto_chunk_data chunk_data;
+        struct mc_proto_disconnect disconnect;
     };
 };
 
