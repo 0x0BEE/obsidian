@@ -19,8 +19,8 @@
 #ifndef OBSIDIAN_LOG_H
 #define OBSIDIAN_LOG_H
 
+#include <errno.h>
 #include <string.h>
-
 
 enum obs_log_level {
     OBS_LOG_LEVEL_TRACE,
