@@ -356,7 +356,6 @@ int mc_proto_encode_disconnect(void* buffer, size_t buffer_size, struct mc_proto
     assert(buffer != NULL);
     size_t cursor = 0;
     encode_byte(buffer, MC_PACKET_DISCONNECT, &cursor);
-    encode_word(buffer, disconnect->message_length, &cursor);
     encode_utf8_string(buffer, disconnect->message, disconnect->message_length, &cursor);
     return cursor;
 }
