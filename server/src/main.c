@@ -17,8 +17,25 @@
  */
 
 #include <assert.h>
+#include <stdbool.h>
 #include <stdlib.h>
+#include <time.h>
+
+#include "obsidian/server.h"
 
 int main() {
+    struct obs_server* server;
+    if (obs_server_create(&server) < 0) {
+        return EXIT_FAILURE;
+    }
+    if (obs_server_listen(server, 25565) < 0) {
+        return EXIT_FAILURE;
+    }
+    while (true) {
+        obs_server_poll(server);
+        clock_nanosleep(CLOCK_MONOTONIC, 0, &(struct timespec){
+                            .tv_sec = 0, .tv_nsec = 1000000
+                        }, NULL);
+    }
     return EXIT_SUCCESS;
 }
