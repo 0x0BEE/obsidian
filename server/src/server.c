@@ -17,6 +17,7 @@
  */
 
 #include "obsidian/server.h"
+#include "obsidian/memory.h"
 #include "obsidian/log.h"
 
 #include <liburing.h>
@@ -26,11 +27,102 @@
 #include <sys/socket.h>
 
 
+#define SESSION_LIMIT 1024
+
+
+struct obs_session {
+    int socket;
+    in_addr_t address;
+    in_port_t port;
+};
+
+
+struct obs_frame_accept {
+    struct sockaddr_in address;
+    socklen_t address_length;
+};
+
+struct obs_frame_send {
+    struct obs_session* session;
+    void* buffer;
+    size_t buffer_size;
+};
+
+struct obs_frame {
+    uint8_t op;
+
+
+    union {
+        struct obs_frame_accept accept;
+        struct obs_frame_send send;
+    };
+};
+
+
 struct obs_server {
     int socket;
+    struct obs_session* sessions;
+    struct obs_pool_allocator* frame_pool;
     struct io_uring ring;
 };
 
+
+struct obs_session* obs_server_acquire_session(struct obs_server const* server) {
+    for (int i = 0; i < SESSION_LIMIT; ++i) {
+        struct obs_session* session = &server->sessions[i];
+        if (session->socket == 0) {
+            return session;
+        }
+    }
+    return NULL;
+}
+
+void obs_server_release_session(struct obs_session* session) {
+    *session = (struct obs_session){0};
+}
+
+struct obs_frame* obs_server_acquire_frame(struct obs_server const* server, uint8_t const op) {
+    struct obs_frame* frame = obs_pool_allocator_alloc(server->frame_pool);
+    frame->op = op;
+    return frame;
+}
+
+void obs_server_release_frame(struct obs_server const* server, struct obs_frame* frame) {
+    obs_pool_allocator_free(server->frame_pool, frame);
+}
+
+int obs_server_queue_submit(struct obs_server* server) {
+    OBS_LOG_TRACE("server", "Submitting I/O queue to kernel");
+    return io_uring_submit(&server->ring);
+}
+
+void obs_server_queue_send(struct obs_server* server, struct obs_session* session,
+                           int const socket, void* buffer, size_t buffer_size) {
+    struct io_uring_sqe* sqe = io_uring_get_sqe(&server->ring);
+    struct obs_frame* frame = obs_server_acquire_frame(server, IORING_OP_SEND);
+    frame->send.session = session;
+    frame->send.buffer = buffer;
+    frame->send.buffer_size = buffer_size;
+    io_uring_prep_send(sqe, socket, buffer, buffer_size, 0);
+    io_uring_sqe_set_data(sqe, frame);
+}
+
+void obs_server_queue_multishot_accept(struct obs_server* server, int const socket) {
+    struct io_uring_sqe* sqe = io_uring_get_sqe(&server->ring);
+    struct obs_frame* frame = obs_server_acquire_frame(server, IORING_OP_ACCEPT);
+    frame->accept.address_length = sizeof(struct sockaddr_in);
+    io_uring_prep_multishot_accept(sqe, socket,
+                                   (struct sockaddr*) &frame->accept.address,
+                                   &frame->accept.address_length, 0);
+    io_uring_sqe_set_data(sqe, frame);
+}
+
+void obs_server_queue_close(struct obs_server* server, int const socket) {
+    struct io_uring_sqe* sqe = io_uring_get_sqe(&server->ring);
+    struct obs_frame* frame = obs_server_acquire_frame(server, IORING_OP_CLOSE);
+    io_uring_prep_close(sqe, socket);
+    io_uring_sqe_set_data(sqe, frame);
+}
 
 int obs_server_create(struct obs_server** server_ptr) {
     struct obs_server* server = malloc(sizeof(struct obs_server));
@@ -38,11 +130,24 @@ int obs_server_create(struct obs_server** server_ptr) {
         OBS_LOG_PERROR("server", "malloc");
         return -ENOMEM;
     }
-
+    server->sessions = calloc(SESSION_LIMIT, sizeof(struct obs_session));
+    if (server->sessions == NULL) {
+        OBS_LOG_ERROR("server", "Could not allocate sessions");
+        free(server);
+        return -ENOMEM;
+    }
+    server->frame_pool = obs_pool_allocator_create(sizeof(struct obs_frame), 4096 * 4);
+    if (server->frame_pool == NULL) {
+        OBS_LOG_ERROR("server", "Could not allocate frame pool");
+        free(server->sessions);
+        free(server);
+        return -ENOMEM;
+    }
     int const result = io_uring_queue_init(128, &server->ring, 0);
     if (result < 0) {
         OBS_LOG_PERROR("server", "io_uring_queue_init");
-        close(server->socket);
+        obs_pool_allocator_destroy(server->frame_pool);
+        free(server->sessions);
         free(server);
         return result;
     }
@@ -77,6 +182,8 @@ int obs_server_listen(struct obs_server* server, uint16_t const port) {
         OBS_LOG_PERROR("server", "listen");
         return -errno;
     }
+    obs_server_queue_multishot_accept(server, server->socket);
+    obs_server_queue_submit(server);
     return 0;
 }
 
@@ -85,6 +192,35 @@ void obs_server_close(struct obs_server* server) {
     server->socket = 0;
 }
 
+void obs_server_disconnect(struct obs_server* server, struct obs_session* session, char const* message) {
+    OBS_LOG_INFO("server", "Disconnecting %08X:%d with reason: %s", session->address, session->port, message);
+
+}
+
+void obs_server_accept_connection(struct obs_server* server, struct obs_frame_accept const* accept, int const socket) {
+    struct obs_session* session = obs_server_acquire_session(server);
+    session->socket = socket;
+    session->address =  ntohl(accept->address.sin_addr.s_addr);
+    session->port = ntohs(accept->address.sin_port);
+    OBS_LOG_INFO("server", "Accepting new connection from %08X:%d", session->address, session->port);
+    obs_server_disconnect(server, session, "Server is closed!");
+}
+
 int obs_server_poll(struct obs_server* server) {
+    struct io_uring_cqe* cqe;
+    while (io_uring_peek_cqe(&server->ring, &cqe) == 0) {
+        struct obs_frame* frame = io_uring_cqe_get_data(cqe);
+        switch (frame->op) {
+            case IORING_OP_ACCEPT: {
+                obs_server_accept_connection(server, &frame->accept, cqe->res);
+                break;
+            }
+
+            default: {
+                obs_server_release_frame(server, frame);
+            }
+        }
+        io_uring_cqe_seen(&server->ring, cqe);
+    }
     return 0;
 }

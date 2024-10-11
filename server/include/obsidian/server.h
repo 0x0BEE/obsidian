@@ -21,6 +21,8 @@
 
 #include <stdint.h>
 
+struct obs_session;
+
 struct obs_server;
 
 int obs_server_create(struct obs_server** server_ptr);
@@ -32,5 +34,7 @@ int obs_server_listen(struct obs_server* server, uint16_t port);
 void obs_server_close(struct obs_server* server);
 
 int obs_server_poll(struct obs_server* server);
+
+void obs_server_disconnect(struct obs_server* server, struct obs_session* session, char const* message);
 
 #endif // !OBSIDIAN_SERVER_H
