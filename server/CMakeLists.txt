@@ -1,7 +1,9 @@
 add_executable(obsidian
         main.cpp
         io/file_descriptor.cpp
-        io/file_descriptor.hpp)
+        io/file_descriptor.hpp
+        net/socket.cpp
+        net/socket.hpp)
 
 set_target_properties(obsidian PROPERTIES
         CXX_STANDARD 20
