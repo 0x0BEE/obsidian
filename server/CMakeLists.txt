@@ -1,5 +1,7 @@
 add_executable(obsidian
-        main.cpp)
+        main.cpp
+        io/file_descriptor.cpp
+        io/file_descriptor.hpp)
 
 set_target_properties(obsidian PROPERTIES
         CXX_STANDARD 20
