@@ -10,5 +10,9 @@ set_target_properties(obsidian PROPERTIES
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF)
 
+target_compile_options(obsidian
+        # Enable compiler warnings.
+        PRIVATE -Wall -Wextra)
+
 target_include_directories(obsidian
         PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
