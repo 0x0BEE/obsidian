@@ -35,14 +35,14 @@ namespace obsidian::io {
         /*!
          * \brief Creates an invalid file descriptor.
          */
-        file_descriptor() = default;
+        file_descriptor() noexcept = default;
 
         /*!
          * \brief Creates a file descriptor from a handle.
          * \param fd File descriptor.
          * \note This takes ownership of fd.
          */
-        explicit file_descriptor(handle_type fd);
+        explicit file_descriptor(handle_type fd) noexcept;
 
         /*!
          * \brief Deleted copy constructor.
@@ -58,7 +58,7 @@ namespace obsidian::io {
         /*!
          * \brief Closes the file descriptor.
          */
-        ~file_descriptor();
+        ~file_descriptor() noexcept;
 
         /*!
          * \brief Deleted copy assignment.
@@ -78,7 +78,7 @@ namespace obsidian::io {
          * \param other The other file descriptor.
          * \return True if these are the same file descriptor.
          */
-        bool operator==(file_descriptor const& other) const {
+        bool operator==(file_descriptor const& other) const noexcept {
             return fd_ == other.fd_;
         }
 

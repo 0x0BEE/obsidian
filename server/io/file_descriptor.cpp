@@ -22,7 +22,7 @@
 #include <utility>
 
 namespace obsidian::io {
-    file_descriptor::file_descriptor(handle_type const fd)
+    file_descriptor::file_descriptor(handle_type const fd) noexcept
         : fd_(fd) {
         // Intentionally left blank.
     }
@@ -32,7 +32,7 @@ namespace obsidian::io {
         // Intentionally left blank.
     }
 
-    file_descriptor::~file_descriptor() {
+    file_descriptor::~file_descriptor() noexcept {
         close(fd_);
     }
 
