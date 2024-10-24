@@ -30,7 +30,7 @@ namespace obsidian::net {
     socket::socket(int const domain, int const type, int const protocol)
         : fd_(::socket(domain, type, protocol)) {
         if (fd_.invalid()) {
-            throw std::system_error{errno, std::generic_category()};
+            throw std::system_error{errno, std::generic_category(), "socket"};
         }
     }
 }
